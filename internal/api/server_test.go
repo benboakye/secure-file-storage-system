@@ -96,7 +96,7 @@ func TestAuthenticatedUploadLifecycle(t *testing.T) {
 		t.Fatalf("unexpected initial upload: %#v", upload)
 	}
 
-	terminal := pollUpload(t, client, testServer.URL, upload.ID)
+	terminal := pollUpload(t, client, testServer.URL, upload.ID, ingest.StatusAccepted)
 	if terminal.Status != ingest.StatusAccepted || terminal.Progress != 100 {
 		t.Fatalf("unexpected terminal upload: %#v", terminal)
 	}
@@ -126,7 +126,7 @@ func TestStoredFileDownloadRequiresOwnerSessionAndReturnsAuthenticatedPlaintext(
 	}
 	var upload ingest.Upload
 	decodeJSON(t, response, &upload)
-	terminal := pollUpload(t, client, testServer.URL, upload.ID)
+	terminal := pollUpload(t, client, testServer.URL, upload.ID, ingest.StatusStored)
 	if terminal.Status != ingest.StatusStored {
 		t.Fatalf("upload did not reach protected storage: %#v", terminal)
 	}
@@ -180,7 +180,7 @@ func TestFileGrantsAndRestoreIdempotencyAreEnforced(t *testing.T) {
 	}
 	var upload ingest.Upload
 	decodeJSON(t, response, &upload)
-	if terminal := pollUpload(t, ownerClient, testServer.URL, upload.ID); terminal.Status != ingest.StatusStored {
+	if terminal := pollUpload(t, ownerClient, testServer.URL, upload.ID, ingest.StatusStored); terminal.Status != ingest.StatusStored {
 		t.Fatalf("upload status: %s", terminal.Status)
 	}
 	response, err = ownerClient.Get(testServer.URL + "/api/v1/files")
@@ -1211,7 +1211,7 @@ func TestRetentionAndLegalHoldBlockOwnerTrashAndCreateDeniedAuditEvidence(t *tes
 		}
 		var upload ingest.Upload
 		decodeJSON(t, response, &upload)
-		if terminal := pollUpload(t, ownerClient, testServer.URL, upload.ID); terminal.Status != ingest.StatusStored {
+		if terminal := pollUpload(t, ownerClient, testServer.URL, upload.ID, ingest.StatusStored); terminal.Status != ingest.StatusStored {
 			t.Fatalf("upload %s did not reach protected storage: %#v", name, terminal)
 		}
 		response, err = ownerClient.Get(testServer.URL + "/api/v1/files")
@@ -1378,7 +1378,7 @@ func TestApprovedCryptographicDeletionIsIdempotentAndAuditedOnce(t *testing.T) {
 	}
 	var upload ingest.Upload
 	decodeJSON(t, response, &upload)
-	if terminal := pollUpload(t, ownerClient, testServer.URL, upload.ID); terminal.Status != ingest.StatusStored {
+	if terminal := pollUpload(t, ownerClient, testServer.URL, upload.ID, ingest.StatusStored); terminal.Status != ingest.StatusStored {
 		t.Fatalf("fixture did not reach protected storage: %#v", terminal)
 	}
 
@@ -1561,7 +1561,7 @@ func uploadRequest(t *testing.T, baseURL, name string, content []byte, idempoten
 	return request
 }
 
-func pollUpload(t *testing.T, client *http.Client, baseURL, uploadID string) ingest.Upload {
+func pollUpload(t *testing.T, client *http.Client, baseURL, uploadID string, expected ingest.Status) ingest.Upload {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -1571,12 +1571,16 @@ func pollUpload(t *testing.T, client *http.Client, baseURL, uploadID string) ing
 		}
 		var upload ingest.Upload
 		decodeJSON(t, response, &upload)
-		if upload.Status == ingest.StatusAccepted || upload.Status == ingest.StatusStored || upload.Status == ingest.StatusRejected || upload.Status == ingest.StatusFailed {
+		// Accepted is terminal only when a protected store is not connected. When
+		// protection is enabled it is an intermediate, policy-approved state at
+		// 75%; the asynchronous encryption transition must reach Stored before a
+		// protected-file test can safely continue.
+		if upload.Status == expected || upload.Status == ingest.StatusRejected || upload.Status == ingest.StatusFailed {
 			return upload
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("upload did not reach terminal status")
+	t.Fatalf("upload did not reach expected status %q", expected)
 	return ingest.Upload{}
 }
 
