@@ -2,7 +2,7 @@
 
 ## Decision
 
-**Not production-ready.** The application, local security controls, and disposable PostgreSQL integration gate passed, but revision control and required external production services remain unresolved release blockers.
+**Not production-ready.** The application, local security controls, disposable PostgreSQL integration gate, and source-control baseline passed, but required external production services remain unresolved release blockers.
 
 ## Verification results
 
@@ -19,7 +19,7 @@
 | Frontend production build | PASS | TypeScript compilation and Vite production bundling completed successfully. |
 | Requirements traceability | PASS with deployment qualifications | All 76 defined identifiers map to implementation and evidence families in `docs/requirements-traceability.md`. |
 | PostgreSQL integration execution | PASS | All nine opt-in tests passed against an isolated PostgreSQL 18 database using a loopback-only ephemeral port and memory-backed storage. See `docs/postgresql-integration-verification-2026-08-15.md`. |
-| Revision control | BLOCKED | Git reports the entire project as untracked; there is no reviewable committed baseline or reproducible revision identifier. |
+| Revision control | PASS | The audited initial baseline was committed locally as `0b110d4` after generated artifacts, runtime data, exports, environment overrides, and local screenshots were excluded. |
 
 ## Corrections made during this stage
 
@@ -76,7 +76,6 @@ Docker Compose packaging, Cloudflare Tunnel publication, Windows automatic start
 
 ## Required next actions
 
-1. Create a reviewable Git baseline and exclude generated caches, binaries, logs, runtime data, and secrets.
-2. Add the verification commands to CI so PostgreSQL integration, race, vet, Staticcheck, vulnerability scans, frontend tests, and builds cannot be skipped silently.
-3. Implement the deferred self-hosted Docker, Cloudflare Tunnel, Windows startup, and Resend deployment package.
-4. Configure and verify the remaining external deployment boundaries before changing the readiness decision.
+1. Add the verification commands to CI so PostgreSQL integration, race, vet, Staticcheck, vulnerability scans, frontend tests, and builds cannot be skipped silently.
+2. Implement the deferred self-hosted Docker, Cloudflare Tunnel, Windows startup, and Resend deployment package.
+3. Configure and verify the remaining external deployment boundaries before changing the readiness decision.
