@@ -1,0 +1,143 @@
+name: SecureStore CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# CI only reads repository contents. No job receives write permissions or
+# deployment credentials.
+permissions:
+  contents: read
+
+concurrency:
+  group: securestore-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.26.6"
+  NODE_VERSION: "24.16.0"
+  STATICCHECK_VERSION: "v0.7.0"
+  GOVULNCHECK_VERSION: "v1.7.0"
+
+jobs:
+  backend:
+    name: Backend, PostgreSQL, and security analysis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        env:
+          POSTGRES_USER: securestore_test
+          POSTGRES_PASSWORD: securestore_ci_only
+          POSTGRES_DB: securestore_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U securestore_test -d securestore_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      SECURESTORE_TEST_DATABASE_URL: postgres://securestore_test:securestore_ci_only@127.0.0.1:5432/securestore_test?sslmode=disable
+      # Fixed test material only. This value never protects deployed audit data.
+      SECURESTORE_TEST_AUDIT_HMAC_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Run full Go suite with PostgreSQL integration
+        run: go test -count=1 ./...
+
+      - name: Run Go vet
+        run: go vet ./...
+
+      - name: Run Staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@"${STATICCHECK_VERSION}"
+          "$(go env GOPATH)/bin/staticcheck" ./...
+
+      - name: Run Go vulnerability analysis
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@"${GOVULNCHECK_VERSION}"
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+  race:
+    name: Go race detector with PostgreSQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        env:
+          POSTGRES_USER: securestore_race
+          POSTGRES_PASSWORD: securestore_race_only
+          POSTGRES_DB: securestore_race
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U securestore_race -d securestore_race"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      SECURESTORE_TEST_DATABASE_URL: postgres://securestore_race:securestore_race_only@127.0.0.1:5432/securestore_race?sslmode=disable
+      SECURESTORE_TEST_AUDIT_HMAC_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - name: Run race-enabled full Go suite
+        run: go test -race -count=1 ./...
+
+  frontend:
+    name: Frontend tests, audit, and production build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Install locked frontend dependencies
+        run: npm ci
+
+      - name: Audit frontend dependencies
+        run: npm audit --audit-level=low
+
+      - name: Run focused frontend tests
+        run: npm run test:frontend
+
+      - name: Build production frontend
+        run: npm run build

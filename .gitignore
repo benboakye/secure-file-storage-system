@@ -1,0 +1,32 @@
+# Local planning documents that should not be published.
+PROJECT_PLAN.private.md
+
+# Front-end dependencies and generated build output.
+node_modules/
+dist/
+.cache/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# Local server state and environment overrides.
+.data/
+.env
+.env.*
+!.env.example
+
+# Generated exports and local verification artifacts may contain user metadata.
+outputs/
+
+# Local UI verification screenshots may contain account identifiers.
+docs/*.png
+
+# Deployment-only monitoring credentials, certificates, and local TSDB state.
+deploy/monitoring/secrets/
+deploy/monitoring/tls/
+deploy/monitoring/data/
+deploy/clamav/database/
+deploy/clamav/logs/
+deploy/kms/secrets/
+deploy/audit-anchor/secrets/
+deploy/production/secrets/

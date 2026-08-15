@@ -1,0 +1,26 @@
+{
+  "name": "secure-file-storage-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:api": "go run ./cmd/server",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test:frontend": "node --experimental-strip-types --test tests/frontend/*.test.mjs",
+    "test:api": "go test ./..."
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "typescript": "latest"
+  }
+}

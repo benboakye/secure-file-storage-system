@@ -1,0 +1,1663 @@
+openapi: 3.1.0
+info:
+  title: SecureStore API
+  version: 0.1.0
+  description: First executable slice for authenticated quarantine-first file ingestion.
+servers:
+  - url: /api/v1
+paths:
+  /metrics:
+    get:
+      operationId: exportMetrics
+      summary: Export aggregate Prometheus metrics for an authorized collector
+      description: Uses a dedicated collector bearer; interactive user and administrator sessions are not accepted. Labels contain bounded route templates and never resource identifiers.
+      servers:
+        - url: /
+      security:
+        - metricsBearer: []
+      responses:
+        '200':
+          description: Prometheus text exposition
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          description: Dedicated collector bearer is missing or invalid
+        '404':
+          description: Metrics exporter is disabled
+  /auth/register:
+    post:
+      operationId: register
+      summary: Register an unverified standard user and send verification instructions
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '202':
+          description: Registration request accepted without creating a session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /auth/verify-email:
+    post:
+      operationId: verifyEmail
+      summary: Consume a single-use email verification token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  minLength: 32
+                  maxLength: 256
+      responses:
+        '200':
+          description: Email verified; the user must sign in separately
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /auth/resend-verification:
+    post:
+      operationId: resendVerification
+      summary: Request rate-limited replacement verification instructions
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  maxLength: 254
+      responses:
+        '202':
+          description: Generic response that does not disclose account existence
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /auth/login:
+    post:
+      operationId: login
+      summary: Create a standard-user session; privileged accounts are rejected
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Signed in
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Valid credentials for an unverified account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: Revoke the current session
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204':
+          description: Session revoked
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /session:
+    get:
+      operationId: getSession
+      summary: Return the current signed-in user and CSRF token
+      responses:
+        '200':
+          description: Active session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /admin/auth/login:
+    post:
+      operationId: privilegedLogin
+      summary: Verify privileged credentials and begin an MFA transaction
+      description: No session is created at this step when privileged MFA is enforced. Standard-user accounts are rejected, and role mismatch uses the generic invalid-credentials response.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '202':
+          description: Password accepted; MFA enrollment or challenge is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrivilegedMFAChallenge'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Valid credentials for an unverified privileged account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429': { description: Network authentication rate limit reached }
+  /admin/auth/mfa/complete:
+    post:
+      operationId: completePrivilegedMFA
+      summary: Complete privileged MFA and create the privileged session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [challengeToken, code]
+              properties:
+                challengeToken: { type: string }
+                code: { type: string, description: Six-digit TOTP or one unused recovery code }
+      responses:
+        '200':
+          description: Privileged session created; enrollment responses include one-time recovery codes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrivilegedMFACompletion'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429': { description: Network authentication rate limit reached }
+  /admin/auth/step-up:
+    post:
+      operationId: createAdministratorStepUpProof
+      summary: Re-authenticate an administrator for high-risk mutations
+      description: Requires the active privileged session, CSRF token, password, and a fresh six-digit TOTP code. Recovery codes are deliberately not accepted. The opaque proof is bound to the exact session and expires after five minutes by default.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password, code]
+              properties:
+                password: { type: string, maxLength: 128 }
+                code: { type: string, pattern: '^[0-9]{6}$' }
+      responses:
+        '200':
+          description: Short-lived, session-bound authorization proof
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StepUpProof' }
+        '401': { description: Password or fresh TOTP verification failed }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { description: Network authentication rate limit reached }
+  /admin/auth/activate:
+    post:
+      operationId: activatePrivilegedAccount
+      summary: Accept a controlled privileged invitation and choose separate credentials
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string, minLength: 12, maxLength: 128 }
+      responses:
+        '200': { description: Verified privileged identity created without creating a session }
+        '400': { description: Invitation is invalid, expired, consumed, or password policy failed }
+        '429': { description: Network activation rate limit reached }
+  /admin/users:
+    get:
+      operationId: listAdminUsers
+      summary: List safe account records for an authenticated administrator
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+            maxLength: 120
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Paginated safe user directory
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUserPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /admin/users/invitations:
+    post:
+      operationId: invitePrivilegedAccount
+      summary: Invite a separate administrator or auditor identity
+      description: Requires administrator role, CSRF validation, and recent step-up authorization. No password is accepted or returned.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/StepUpToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, email, role]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                email: { type: string, format: email, maxLength: 254 }
+                role: { type: string, enum: [admin, auditor] }
+      responses:
+        '202': { description: Single-use invitation created and delivered }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: Account or pending invitation already uses the email address }
+  /admin/users/{userId}/status:
+    patch:
+      operationId: updateAdminUserStatus
+      summary: Suspend or reactivate another account and revoke its sessions
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/StepUpToken'
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [active, suspended]
+      responses:
+        '200':
+          description: Status changed and sessions revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Self-management is prohibited
+  /admin/users/{userId}/sessions/revoke:
+    post:
+      operationId: revokeAdminUserSessions
+      summary: Revoke every session belonging to another account
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/StepUpToken'
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Sessions revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Self-management is prohibited
+  /admin/resources:
+    get:
+      operationId: listAdminResources
+      summary: List safe runtime resource metadata and measured quarantine usage
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+            maxLength: 120
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Runtime resource inventory with explicit durability limitations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminResourcePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /admin/resources/owners/{ownerId}/quota:
+    put:
+      operationId: updateOwnerQuota
+      summary: Set the durable storage quota for a standard-user account
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/StepUpToken'
+        - name: ownerId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quotaBytes]
+              properties:
+                quotaBytes:
+                  type: integer
+                  format: int64
+                  minimum: 1048576
+                  maximum: 10995116277760
+      responses:
+        '200':
+          description: Owner quota persisted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The target is not a standard-user account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /admin/security:
+    get:
+      operationId: getAdminSecurityPosture
+      summary: Read server-confirmed security and compliance posture
+      responses:
+        '200':
+          description: Safe authentication, account, inspection, and integration posture
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminSecuritySummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /admin/monitoring:
+    get:
+      operationId: getAdminMonitoring
+      summary: Read live service status and effective global policy
+      responses:
+        '200':
+          description: Safe operational signals and explicit integration gaps
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminMonitoringSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /admin/lifecycle:
+    get:
+      operationId: getAdminLifecycle
+      summary: Read durable lifecycle and quarantine reconciliation evidence
+      responses:
+        '200':
+          description: Safe lifecycle state, pending-work, reconciliation, and capability posture
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminLifecycleSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /admin/lifecycle/files/{fileId}/retention:
+    put:
+      operationId: setFileRetention
+      summary: Extend the retention deadline for protected file metadata
+      parameters:
+        - { name: fileId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/StepUpToken'
+      responses:
+        '200': { description: Retention deadline updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { description: Active retention cannot be shortened }
+  /admin/lifecycle/process:
+    post:
+      operationId: processLifecycleDeletions
+      summary: Run a bounded evaluation of deletion-eligible files
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/StepUpToken'
+      responses:
+        '200': { description: Counts of examined, completed, and failed operations }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/lifecycle/files/{fileId}/recovery-drill:
+    post:
+      operationId: runRecoveryDrill
+      summary: Verify the current encrypted version without returning plaintext
+      parameters:
+        - { name: fileId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/StepUpToken'
+      responses:
+        '200': { description: Metadata-only recovery evidence }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { description: Encrypted version failed integrity verification }
+  /admin/lifecycle/files/{fileId}/legal-hold:
+    put:
+      operationId: setFileLegalHold
+      summary: Apply or release an administrator legal hold
+      parameters:
+        - { name: fileId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/StepUpToken'
+      responses:
+        '200': { description: Legal hold updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/audit:
+    get:
+      operationId: listAuditEvents
+      summary: List safe audit events and verify the HMAC chain
+      parameters:
+        - name: search
+          in: query
+          schema: { type: string, maxLength: 120 }
+        - { name: actorId, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: resourceType, in: query, schema: { type: string } }
+        - { name: outcome, in: query, schema: { type: string, enum: [success, denied, failed] } }
+        - { name: ipAddress, in: query, description: Converted to a keyed fingerprint before matching; the raw address is not stored, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Safe event projection with chain-verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /admin/audit/export:
+    get:
+      operationId: exportAuditEvents
+      summary: Export the filtered safe audit projection as CSV
+      responses:
+        '200':
+          description: Bounded CSV export with X-Audit-Chain-Valid integrity header
+          content:
+            text/csv:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /uploads:
+    post:
+      operationId: createUpload
+      summary: Stream one untrusted file into quarantine
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/FileSize'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '202':
+          description: Upload quarantined and inspection scheduled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The declared bytes would exceed the authenticated owner's quota
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Upload limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '507':
+          description: The protected-storage safety boundary cannot admit the declared bytes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /uploads/{uploadId}:
+    get:
+      operationId: getUpload
+      summary: Poll authoritative quarantine and inspection status
+      parameters:
+        - name: uploadId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Current upload state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /uploads/{uploadId}/content:
+    get:
+      operationId: downloadProtectedUpload
+      summary: Authenticate and download an owner-authorized stored file
+      parameters:
+        - in: path
+          name: uploadId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Fully authenticated plaintext returned after protected-file verification and required audit append
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '401': { description: Authentication required }
+        '404': { description: Stored owner resource unavailable }
+        '503': { description: Ciphertext, envelope, key, or integrity verification unavailable }
+  /files:
+    get:
+      operationId: listUserFiles
+      summary: List safe authoritative metadata for the authenticated standard-user owner
+      responses:
+        '200':
+          description: Owner-scoped file records ordered newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [files, total]
+                properties:
+                  files:
+                    type: array
+                    items: { $ref: '#/components/schemas/LogicalFile' }
+                  total: { type: integer }
+        '401': { description: Authentication required }
+  /files/shared:
+    get:
+      operationId: listSharedFiles
+      summary: List files authorized to the authenticated recipient by active grants
+      responses:
+        '200':
+          description: Active, unexpired shared files
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [files, total]
+                properties:
+                  files:
+                    type: array
+                    items: { $ref: '#/components/schemas/SharedFile' }
+                  total: { type: integer }
+        '401': { description: Authentication required }
+  /files/trash:
+    get:
+      operationId: listTrash
+      summary: List owner files in the deletion grace period
+      responses:
+        '200':
+          description: Owner-scoped Trash records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files: { type: array, items: { $ref: '#/components/schemas/LifecycleFile' } }
+                  total: { type: integer }
+  /files/{fileId}:
+    get:
+      operationId: getFileDetails
+      summary: Get owner- or grant-authorized logical file metadata and immutable versions
+      parameters:
+        - in: path
+          name: fileId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Logical file and newest-first immutable version history
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileDetails' }
+        '401': { description: Authentication required }
+        '404': { description: File unavailable to this requester }
+    delete:
+      operationId: permanentlyDeleteFile
+      summary: Cryptographically delete a file after all policy gates pass
+      parameters:
+        - { name: fileId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200': { description: Wrapped keys destroyed and deletion tombstone committed }
+        '409': { description: Grace period, retention, or legal hold blocks deletion }
+  /files/{fileId}/trash:
+    post:
+      operationId: moveFileToTrash
+      summary: Move an owner file to the 30-day recovery period and revoke grants
+      parameters:
+        - { name: fileId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '200': { description: File moved to Trash }
+        '409': { description: Retention or legal hold blocks deletion }
+  /files/{fileId}/restore:
+    post:
+      operationId: restoreFileFromTrash
+      summary: Restore an owner file without reactivating revoked grants
+      parameters:
+        - { name: fileId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '200': { description: File returned to the active catalog }
+        '409': { description: File is not in Trash }
+  /files/{fileId}/grants:
+    get:
+      operationId: listFileGrants
+      summary: List active grants as the file owner
+      parameters:
+        - in: path
+          name: fileId
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Active, unexpired grants }
+        '404': { description: Owner file unavailable }
+    post:
+      operationId: createFileGrant
+      summary: Create or update an active owner-controlled grant
+      parameters:
+        - in: path
+          name: fileId
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateFileGrantRequest' }
+      responses:
+        '201':
+          description: Active grant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileGrant' }
+        '403': { description: CSRF validation failed }
+        '404': { description: File or eligible recipient unavailable }
+  /files/{fileId}/grants/{grantId}:
+    delete:
+      operationId: revokeFileGrant
+      summary: Revoke an active grant as the file owner
+      parameters:
+        - in: path
+          name: fileId
+          required: true
+          schema: { type: string }
+        - in: path
+          name: grantId
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '200': { description: Grant revoked }
+        '403': { description: CSRF validation failed }
+        '404': { description: Active owner grant unavailable }
+  /files/{fileId}/content:
+    get:
+      operationId: downloadCurrentFileVersion
+      summary: Authenticate and download the current immutable version
+      parameters:
+        - in: path
+          name: fileId
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Authenticated current-version plaintext }
+        '401': { description: Authentication required }
+        '404': { description: File or download capability unavailable to this requester }
+        '503': { description: Integrity, key, or storage verification unavailable }
+  /files/{fileId}/versions/{versionId}/restore:
+    post:
+      operationId: restoreFileVersion
+      summary: Verify a historical version and create a new encrypted current version
+      parameters:
+        - in: path
+          name: fileId
+          required: true
+          schema: { type: string }
+        - in: path
+          name: versionId
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/CsrfToken'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: New immutable restored version
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileVersion' }
+        '401': { description: Authentication required }
+        '403': { description: CSRF validation failed }
+        '404': { description: File or source version unavailable to this owner }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: securestore_session
+    metricsBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+  parameters:
+    CsrfToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      schema:
+        type: string
+    StepUpToken:
+      name: X-Step-Up-Token
+      in: header
+      required: true
+      description: Opaque five-minute authorization proof issued by the administrator step-up endpoint and bound to the current privileged session.
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+    FileSize:
+      name: X-File-Size
+      in: header
+      required: true
+      description: Exact file byte length used for durable quota and capacity reservation; the streamed body must match.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+  schemas:
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [name, email, password]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          maxLength: 128
+    User:
+      type: object
+      required: [id, name, email, role]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [user, auditor, admin]
+    SessionResponse:
+      type: object
+      required: [user, csrfToken]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        csrfToken:
+          type: string
+    PrivilegedMFAChallenge:
+      type: object
+      required: [mfaRequired, mode, challengeToken, expiresAt]
+      properties:
+        mfaRequired: { type: boolean, const: true }
+        mode: { type: string, enum: [enroll, challenge] }
+        challengeToken: { type: string }
+        expiresAt: { type: string, format: date-time }
+        manualEntrySecret: { type: string }
+        otpAuthUri: { type: string }
+    PrivilegedMFACompletion:
+      allOf:
+        - $ref: '#/components/schemas/SessionResponse'
+        - type: object
+          properties:
+            recoveryCodes: { type: array, items: { type: string } }
+    StepUpProof:
+      type: object
+      additionalProperties: false
+      required: [stepUpToken, expiresAt]
+      properties:
+        stepUpToken: { type: string }
+        expiresAt: { type: string, format: date-time }
+    MessageResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+    AdminUser:
+      type: object
+      required: [id, name, email, role, verificationStatus, accountStatus, createdAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [user, auditor, admin]
+        verificationStatus:
+          type: string
+          enum: [pending, verified]
+        accountStatus:
+          type: string
+          enum: [active, suspended, locked]
+        emailVerifiedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    AdminUserPage:
+      type: object
+      required: [users, total, limit, offset]
+      properties:
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminUser'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+        offset:
+          type: integer
+    AdminResource:
+      type: object
+      required: [id, ownerId, name, size, declaredMediaType, detectedMediaType, status, correlationId, createdAt]
+      properties:
+        id:
+          type: string
+        ownerId:
+          type: string
+        name:
+          type: string
+        size:
+          type: integer
+          format: int64
+        declaredMediaType:
+          type: string
+        detectedMediaType:
+          type: string
+        status:
+          $ref: '#/components/schemas/UploadStatus'
+        decisionReason:
+          type: string
+        correlationId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    AuditEvent:
+      type: object
+      required: [sequence, eventId, occurredAt, actorType, actorId, action, resourceType, resourceId, outcome, reasonCode, correlationId, keyVersion]
+      properties:
+        sequence: { type: integer, format: int64 }
+        eventId: { type: string }
+        occurredAt: { type: string, format: date-time }
+        actorType: { type: string }
+        actorId: { type: string }
+        action: { type: string }
+        resourceType: { type: string }
+        resourceId: { type: string }
+        outcome: { type: string }
+        reasonCode: { type: string }
+        correlationId: { type: string }
+        fromState: { type: string }
+        toState: { type: string }
+        keyVersion: { type: string }
+        networkSource: { type: string, description: Keyed non-reversible network-address fingerprint }
+    AuditAlert:
+      type: object
+      required: [id, type, severity, title, detail, count, detectedAt]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        severity: { type: string, enum: [medium, high, critical] }
+        title: { type: string }
+        detail: { type: string }
+        count: { type: integer }
+        detectedAt: { type: string, format: date-time }
+    AuditPage:
+      type: object
+      required: [events, total, limit, offset, verification, summary, alerts]
+      properties:
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/AuditEvent' }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+        verification:
+          type: object
+          required: [valid, eventCount, verifiedThrough, checkpointTrust, anchor]
+          properties:
+            valid: { type: boolean }
+            eventCount: { type: integer }
+            verifiedThrough: { type: integer, format: int64 }
+            checkpointAt: { type: string, format: date-time }
+            checkpointTrust: { type: string }
+            failureCategory: { type: string }
+            firstInvalidSequence: { type: integer, format: int64 }
+            anchor:
+              type: object
+              required: [connected, productionReady, adapter, detail, valid, anchoredThrough]
+              properties:
+                connected: { type: boolean }
+                productionReady: { type: boolean }
+                adapter: { type: string }
+                detail: { type: string }
+                valid: { type: boolean }
+                anchoredThrough: { type: integer, format: int64 }
+                anchoredAt: { type: string, format: date-time }
+                failureCategory: { type: string, enum: [not_configured, anchor_unavailable, anchor_signature_invalid, anchor_checkpoint_mismatch] }
+        summary:
+          type: object
+          required: [total, matching, successful, denied, failed, last24Hours, distinctActors, highRisk]
+          properties:
+            total: { type: integer }
+            matching: { type: integer }
+            successful: { type: integer }
+            denied: { type: integer }
+            failed: { type: integer }
+            last24Hours: { type: integer }
+            distinctActors: { type: integer }
+            highRisk: { type: integer }
+        alerts:
+          type: array
+          items: { $ref: '#/components/schemas/AuditAlert' }
+    AdminLifecycleSummary:
+      type: object
+      required: [generatedAt, lifecycle, protectedFiles, capabilities]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        lifecycle:
+          type: object
+          required: [statusCounts, pendingProcessing, stuckProcessing, trackedRecords, metadataDurable, quarantineBytes, orphanedObjects, orphanedBytes, recentRecords]
+          properties:
+            statusCounts:
+              type: object
+              additionalProperties: { type: integer }
+            pendingProcessing: { type: integer }
+            stuckProcessing: { type: integer }
+            oldestPendingAt: { type: string, format: date-time }
+            trackedRecords: { type: integer }
+            metadataDurable: { type: boolean }
+            quarantineBytes: { type: integer, format: int64 }
+            orphanedObjects: { type: integer }
+            orphanedBytes: { type: integer, format: int64 }
+            recentRecords:
+              type: array
+              items:
+                $ref: '#/components/schemas/AdminResource'
+        capabilities:
+          type: object
+          required: [quarantineWorkflow, inspectionDecisions, protectedStorage, versionHistory, retentionPolicy, legalHolds, deletionGracePeriod, cryptographicDeletion, backupMonitoring, verifiedRecovery]
+          properties:
+            quarantineWorkflow: { type: boolean }
+            inspectionDecisions: { type: boolean }
+            protectedStorage: { type: boolean }
+            versionHistory: { type: boolean }
+            retentionPolicy: { type: boolean }
+            legalHolds: { type: boolean }
+            deletionGracePeriod: { type: boolean }
+            cryptographicDeletion: { type: boolean }
+            backupMonitoring: { type: boolean }
+            verifiedRecovery: { type: boolean }
+        protectedFiles:
+          $ref: '#/components/schemas/LifecycleSummary'
+    AdminMonitoringSummary:
+      type: object
+      required: [generatedAt, startedAt, uptimeSeconds, api, persistence, worker, quarantine, scanner, policies, telemetry, externalTelemetryConnected, backupMonitoringConnected, encryptionServiceConnected, keyService, audit]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        startedAt: { type: string, format: date-time }
+        uptimeSeconds: { type: integer, format: int64 }
+        api:
+          type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [operational] }
+        persistence:
+          type: object
+          required: [authentication, ingestionDurable]
+          properties:
+            authentication:
+              type: object
+              required: [durable, driver]
+              properties:
+                durable: { type: boolean }
+                driver: { type: string }
+            ingestionDurable: { type: boolean }
+        worker:
+          type: object
+          required: [mode, pendingProcessing, failedRecords]
+          properties:
+            mode: { type: string }
+            pendingProcessing: { type: integer }
+            failedRecords: { type: integer }
+        quarantine:
+          type: object
+          required: [bytes, orphanedObjects, orphanedBytes]
+          properties:
+            bytes: { type: integer, format: int64 }
+            orphanedObjects: { type: integer }
+            orphanedBytes: { type: integer, format: int64 }
+        audit:
+          type: object
+          required: [durable, integrityValid, eventCount, eventsLast24Hours, deniedLast24Hours, highRiskLast24Hours, pendingEvidence, anchor, alerts]
+          properties:
+            durable: { type: boolean }
+            integrityValid: { type: boolean }
+            eventCount: { type: integer }
+            eventsLast24Hours: { type: integer }
+            deniedLast24Hours: { type: integer }
+            highRiskLast24Hours: { type: integer }
+            pendingEvidence: { type: integer, minimum: 0 }
+            anchor:
+              $ref: '#/components/schemas/AuditAnchorPosture'
+            alerts:
+              type: array
+              items: { $ref: '#/components/schemas/AuditAlert' }
+        scanner:
+          type: object
+          required: [connected, productionReady, failClosed, signaturesFresh, adapter, policyVersion, signatureMaxAgeSeconds, detail]
+          properties:
+            connected: { type: boolean }
+            productionReady: { type: boolean }
+            failClosed: { type: boolean }
+            signaturesFresh: { type: boolean }
+            adapter: { type: string }
+            policyVersion: { type: string }
+            engineVersion: { type: string }
+            signatureDatabase: { type: string }
+            signatureUpdatedAt: { type: string, format: date-time }
+            signatureAgeSeconds: { type: integer, format: int64, minimum: 0 }
+            signatureMaxAgeSeconds: { type: integer, format: int64, minimum: 0 }
+            checkedAt: { type: string, format: date-time }
+            detail: { type: string }
+        policies:
+          type: object
+          required: [ingestion, sessionTtlSeconds, secureCookies, allowedOrigins, deploymentMode, httpsRequired]
+          properties:
+            ingestion:
+              type: object
+              required: [maxUploadBytes, defaultOwnerQuotaBytes, inspectionTtlSeconds]
+              properties:
+                maxUploadBytes: { type: integer, format: int64 }
+                defaultOwnerQuotaBytes: { type: integer, format: int64 }
+                inspectionTtlSeconds: { type: integer, format: int64 }
+            sessionTtlSeconds: { type: integer, format: int64 }
+            secureCookies: { type: boolean }
+            allowedOrigins: { type: integer }
+            deploymentMode: { type: string, enum: [development, production] }
+            httpsRequired: { type: boolean }
+        telemetry:
+          type: object
+          required: [exporterEnabled, connected, scrapesTotal, staleAfterSeconds]
+          properties:
+            exporterEnabled: { type: boolean }
+            connected: { type: boolean }
+            scrapesTotal: { type: integer, format: int64, minimum: 0 }
+            lastScrapeAt: { type: string, format: date-time }
+            staleAfterSeconds: { type: integer, format: int64, minimum: 1 }
+        externalTelemetryConnected: { type: boolean }
+        backupMonitoringConnected: { type: boolean }
+        encryptionServiceConnected: { type: boolean }
+        keyService:
+          $ref: '#/components/schemas/KeyProviderPosture'
+    AdminSecuritySummary:
+      type: object
+      required: [generatedAt, authentication, accounts, ingestion, auditChainConnected, auditAnchor, encryptionServiceConnected, keyService, keyRotation]
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+        authentication:
+          type: object
+          required: [passwordHashAlgorithm, passwordHashCost, sessionTtlSeconds, verificationTtlSeconds, emailVerificationRequired, opaqueServerSessions, csrfProtection, privilegedBoundary, mfaEnforced, accountLockoutEnabled, loginFailureThreshold, loginFailureWindowSeconds, accountLockSeconds, adminStepUpEnforced, stepUpTtlSeconds]
+          properties:
+            passwordHashAlgorithm: { type: string }
+            passwordHashCost: { type: integer }
+            sessionTtlSeconds: { type: integer, format: int64 }
+            verificationTtlSeconds: { type: integer, format: int64 }
+            emailVerificationRequired: { type: boolean }
+            opaqueServerSessions: { type: boolean }
+            csrfProtection: { type: boolean }
+            privilegedBoundary: { type: boolean }
+            mfaEnforced: { type: boolean }
+            accountLockoutEnabled: { type: boolean }
+            loginFailureThreshold: { type: integer }
+            loginFailureWindowSeconds: { type: integer, format: int64 }
+            accountLockSeconds: { type: integer, format: int64 }
+            adminStepUpEnforced: { type: boolean }
+            stepUpTtlSeconds: { type: integer, format: int64 }
+        accounts:
+          type: object
+          required: [total, verified, unverified, active, suspended, locked, administrators, auditors]
+          properties:
+            total: { type: integer }
+            verified: { type: integer }
+            unverified: { type: integer }
+            active: { type: integer }
+            suspended: { type: integer }
+            locked: { type: integer }
+            administrators: { type: integer }
+            auditors: { type: integer }
+        ingestion:
+          type: object
+          required: [statusCounts, scanner]
+          properties:
+            statusCounts:
+              type: object
+              additionalProperties: { type: integer }
+            scanner:
+              type: object
+              required: [connected, productionReady, failClosed, signaturesFresh, adapter, policyVersion, signatureMaxAgeSeconds, detail]
+              properties:
+                connected: { type: boolean }
+                productionReady: { type: boolean }
+                failClosed: { type: boolean }
+                signaturesFresh: { type: boolean }
+                adapter: { type: string }
+                policyVersion: { type: string }
+                engineVersion: { type: string }
+                signatureDatabase: { type: string }
+                signatureUpdatedAt: { type: string, format: date-time }
+                signatureAgeSeconds: { type: integer, format: int64, minimum: 0 }
+                signatureMaxAgeSeconds: { type: integer, format: int64, minimum: 0 }
+                checkedAt: { type: string, format: date-time }
+                detail: { type: string }
+        auditChainConnected: { type: boolean }
+        auditAnchor:
+          $ref: '#/components/schemas/AuditAnchorPosture'
+        encryptionServiceConnected: { type: boolean }
+        keyService:
+          $ref: '#/components/schemas/KeyProviderPosture'
+        keyRotation:
+          $ref: '#/components/schemas/KeyRotationPosture'
+    KeyProviderPosture:
+      type: object
+      additionalProperties: false
+      required: [connected, productionReady, hardwareBacked, adapter, keyId, keyVersion, detail]
+      properties:
+        connected: { type: boolean }
+        productionReady: { type: boolean }
+        hardwareBacked: { type: boolean }
+        adapter: { type: string }
+        provider: { type: string }
+        keyId: { type: string }
+        keyVersion: { type: string }
+        checkedAt: { type: string, format: date-time }
+        detail: { type: string }
+    AuditAnchorPosture:
+      type: object
+      additionalProperties: false
+      required: [connected, productionReady, adapter, detail, valid, anchoredThrough]
+      properties:
+        connected: { type: boolean }
+        productionReady: { type: boolean }
+        adapter: { type: string }
+        detail: { type: string }
+        valid: { type: boolean }
+        anchoredThrough: { type: integer, format: int64, minimum: 0 }
+        anchoredAt: { type: string, format: date-time }
+        failureCategory: { type: string }
+    KeyRotationPosture:
+      type: object
+      additionalProperties: false
+      required: [currentKekId, currentKekVersion, protectedVersions, currentVersions, pendingVersions, completedRewraps, durable]
+      properties:
+        currentKekId: { type: string }
+        currentKekVersion: { type: string }
+        protectedVersions: { type: integer, minimum: 0 }
+        currentVersions: { type: integer, minimum: 0 }
+        pendingVersions: { type: integer, minimum: 0 }
+        completedRewraps: { type: integer, minimum: 0 }
+        durable: { type: boolean }
+    AdminResourceSummary:
+      type: object
+      required: [trackedUploads, trackedBytes, quarantineBytes, orphanedObjects, orphanedBytes, pendingProcessing, bytesLast24Hours, bytesLast7Days, ownerUsage, quotaOverrides, defaultQuotaBytes, quotaAlerts, statusCounts, metadataDurable, runtimeOnly, protectedStorageConnected, protectedCapacity]
+      properties:
+        trackedUploads:
+          type: integer
+        trackedBytes:
+          type: integer
+          format: int64
+        quarantineBytes:
+          type: integer
+          format: int64
+        orphanedObjects:
+          type: integer
+        orphanedBytes:
+          type: integer
+          format: int64
+        pendingProcessing:
+          type: integer
+        bytesLast24Hours:
+          type: integer
+          format: int64
+        bytesLast7Days:
+          type: integer
+          format: int64
+        ownerUsage:
+          type: array
+          items:
+            type: object
+            required: [ownerId, uploads, bytes, quotaBytes]
+            properties:
+              ownerId:
+                type: string
+              uploads:
+                type: integer
+              bytes:
+                type: integer
+                format: int64
+              quotaBytes:
+                type: integer
+                format: int64
+        quotaOverrides:
+          type: array
+          description: Durable per-owner quota policies; omitted owners use the default quota.
+          items:
+            type: object
+            required: [ownerId, quotaBytes]
+            properties:
+              ownerId:
+                type: string
+              quotaBytes:
+                type: integer
+                format: int64
+        defaultQuotaBytes:
+          type: integer
+          format: int64
+        quotaAlerts:
+          type: integer
+        statusCounts:
+          type: object
+          additionalProperties:
+            type: integer
+        runtimeOnly:
+          type: boolean
+        metadataDurable:
+          type: boolean
+        protectedStorageConnected:
+          type: boolean
+        protectedCapacity:
+          type: object
+          description: Metadata-only reconciliation of protected-version records, ciphertext objects, and the hosting filesystem volume. Volume figures may include unrelated files on the same volume.
+          required: [trackedObjects, trackedCiphertextBytes, orphanedObjects, orphanedBytes, missingObjects, volumeTotalBytes, volumeAvailableBytes, volumeUsedPercent, alerts]
+          properties:
+            trackedObjects: { type: integer, minimum: 0 }
+            trackedCiphertextBytes: { type: integer, format: int64, minimum: 0 }
+            orphanedObjects: { type: integer, minimum: 0 }
+            orphanedBytes: { type: integer, format: int64, minimum: 0 }
+            missingObjects: { type: integer, minimum: 0 }
+            volumeTotalBytes: { type: integer, format: int64, minimum: 0 }
+            volumeAvailableBytes: { type: integer, format: int64, minimum: 0 }
+            volumeUsedPercent: { type: number, format: double, minimum: 0, maximum: 100 }
+            alerts:
+              type: array
+              items:
+                type: object
+                required: [id, severity, title, detail, count]
+                properties:
+                  id: { type: string }
+                  severity: { type: string, enum: [medium, high] }
+                  title: { type: string }
+                  detail: { type: string }
+                  count: { type: integer, minimum: 1 }
+    AdminResourcePage:
+      type: object
+      required: [resources, summary, total, limit, offset]
+      properties:
+        resources:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminResource'
+        summary:
+          $ref: '#/components/schemas/AdminResourceSummary'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+    UploadStatus:
+      type: string
+      enum: [quarantined, inspecting, accepted, encrypting, stored, rejected, failed]
+    UploadResponse:
+      type: object
+      required: [id, name, size, declaredMediaType, detectedMediaType, status, progress, correlationId, createdAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        size:
+          type: integer
+          format: int64
+        declaredMediaType:
+          type: string
+        detectedMediaType:
+          type: string
+        status:
+          $ref: '#/components/schemas/UploadStatus'
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        decisionReason:
+          type: string
+        correlationId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    LogicalFile:
+      type: object
+      required: [fileId, ownerId, name, currentVersionId, createdAt, updatedAt]
+      properties:
+        fileId: { type: string }
+        ownerId: { type: string }
+        name: { type: string }
+        currentVersionId: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    LifecycleFile:
+      allOf:
+        - $ref: '#/components/schemas/LogicalFile'
+        - type: object
+          required: [legalHold]
+          properties:
+            deletedAt: { type: string, format: date-time }
+            purgeAfter: { type: string, format: date-time }
+            retentionUntil: { type: string, format: date-time }
+            legalHold: { type: boolean }
+            legalHoldReason: { type: string }
+            purgedAt: { type: string, format: date-time }
+    LifecycleSummary:
+      type: object
+      required: [active, trashed, retained, held, purged, eligibleForPurge, files, deletionOperations, recoveryDrills, alerts, backup]
+      properties:
+        active: { type: integer }
+        trashed: { type: integer }
+        retained: { type: integer }
+        held: { type: integer }
+        purged: { type: integer }
+        eligibleForPurge: { type: integer }
+        files: { type: array, items: { $ref: '#/components/schemas/LifecycleFile' } }
+        deletionOperations: { type: array, items: { type: object } }
+        recoveryDrills: { type: array, items: { type: object } }
+        alerts: { type: array, items: { type: object } }
+        backup:
+          type: object
+          required: [connected, productionReady, adapter, status, detail]
+          properties:
+            connected: { type: boolean }
+            productionReady: { type: boolean }
+            adapter: { type: string }
+            status: { type: string }
+            detail: { type: string }
+            lastSuccessfulAt: { type: string, format: date-time }
+    FileVersion:
+      type: object
+      required: [fileId, versionId, number, plaintextSize, mediaType, reason, current, createdAt]
+      properties:
+        fileId: { type: string }
+        versionId: { type: string }
+        sourceVersionId: { type: string }
+        number: { type: integer, format: int64, minimum: 1 }
+        plaintextSize: { type: integer, format: int64, minimum: 1 }
+        mediaType: { type: string }
+        reason: { type: string, enum: [initial_upload, verified_restore] }
+        current: { type: boolean }
+        createdAt: { type: string, format: date-time }
+    FileDetails:
+      type: object
+      required: [file, versions, access]
+      properties:
+        file: { $ref: '#/components/schemas/LogicalFile' }
+        versions:
+          type: array
+          items: { $ref: '#/components/schemas/FileVersion' }
+        access: { type: string, enum: [owner, read, download] }
+    SharedFile:
+      allOf:
+        - $ref: '#/components/schemas/LogicalFile'
+        - type: object
+          required: [ownerName, ownerEmail, permission]
+          properties:
+            ownerName: { type: string }
+            ownerEmail: { type: string, format: email }
+            permission: { type: string, enum: [read, download] }
+    CreateFileGrantRequest:
+      type: object
+      additionalProperties: false
+      required: [recipientEmail, permission]
+      properties:
+        recipientEmail: { type: string, format: email }
+        permission: { type: string, enum: [read, download] }
+        expiresAt: { type: string, format: date-time }
+    FileGrant:
+      type: object
+      required: [grantId, fileId, ownerId, recipientId, recipientName, recipientEmail, permission, createdAt]
+      properties:
+        grantId: { type: string }
+        fileId: { type: string }
+        ownerId: { type: string }
+        recipientId: { type: string }
+        recipientName: { type: string }
+        recipientEmail: { type: string, format: email }
+        permission: { type: string, enum: [read, download] }
+        expiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    ErrorResponse:
+      type: object
+      required: [code, message, correlationId]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        correlationId:
+          type: string
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Authentication required or invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Request is not authorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Request conflicts with current state
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+security:
+  - sessionCookie: []
