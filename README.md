@@ -153,6 +153,8 @@ npm run dev
 
 The Vite development server proxies `/api` to `127.0.0.1:8080`. Local quarantine data is written beneath `.data/quarantine` using server-generated opaque filenames and is excluded from version control. Configuration options are documented in `.env.example`; the API contract is maintained in `api/openapi.yaml`.
 
+The checked-in [continuous-integration workflow](docs/continuous-integration.md) runs the full Go and PostgreSQL suite, race detection, Go static and vulnerability analysis, frontend dependency audit, focused frontend tests, and the production build. The workflow is verification-only and receives no deployment credentials.
+
 ## Status
 
 The current executable includes durable PostgreSQL identity, ingestion, protected-file, lifecycle, sharing, quota, and audit metadata; isolated quarantine; configurable deterministic or ClamD inspection; envelope-encrypted immutable versions; separate privileged sessions; and administrator governance views. Local adapters remain intentionally non-production where the dashboard and documentation say so.

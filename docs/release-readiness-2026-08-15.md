@@ -20,6 +20,7 @@
 | Requirements traceability | PASS with deployment qualifications | All 76 defined identifiers map to implementation and evidence families in `docs/requirements-traceability.md`. |
 | PostgreSQL integration execution | PASS | All nine opt-in tests passed against an isolated PostgreSQL 18 database using a loopback-only ephemeral port and memory-backed storage. See `docs/postgresql-integration-verification-2026-08-15.md`. |
 | Revision control | PASS | The audited initial baseline was committed locally as `0b110d4` after generated artifacts, runtime data, exports, environment overrides, and local screenshots were excluded. |
+| Continuous-integration definition | PASS locally; first remote run pending | The read-only GitHub Actions workflow passed actionlint v1.7.12. Its equivalent local gates passed, including the complete race-enabled suite against isolated PostgreSQL, Staticcheck, `govulncheck`, npm audit, frontend tests, and production build. |
 
 ## Corrections made during this stage
 
@@ -76,6 +77,6 @@ Docker Compose packaging, Cloudflare Tunnel publication, Windows automatic start
 
 ## Required next actions
 
-1. Add the verification commands to CI so PostgreSQL integration, race, vet, Staticcheck, vulnerability scans, frontend tests, and builds cannot be skipped silently.
+1. Publish the local history and CI workflow to GitHub, verify its first run, and configure branch protection to require all three jobs.
 2. Implement the deferred self-hosted Docker, Cloudflare Tunnel, Windows startup, and Resend deployment package.
 3. Configure and verify the remaining external deployment boundaries before changing the readiness decision.

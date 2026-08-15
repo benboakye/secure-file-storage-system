@@ -106,6 +106,8 @@ Backup-provider and disaster-recovery tests are deferred with the corresponding 
 - Use built-in fuzzing for untrusted decoders and state-machine inputs.
 - Run `go vet ./...` and an agreed static security analyzer once the module exists.
 - Pin and review dependencies; use `govulncheck` for Go dependency/reachability findings.
+
+The checked-in GitHub Actions workflow applies these gates to every push and pull request targeting `main`. It also runs the nine opt-in PostgreSQL tests and the race-enabled suite against separate disposable PostgreSQL services. See `docs/continuous-integration.md` for job boundaries, pinned dependencies, and branch-protection follow-up.
 - SCA of uploaded artifacts is distinct from SCA of the project's own Go dependencies.
 
 ## Test data safety
