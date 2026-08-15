@@ -72,12 +72,12 @@ type resendEmailRequest struct {
 func NewResendMailer(config ResendMailerConfig) (*ResendMailer, error) {
 	apiKey := strings.TrimSpace(config.APIKey)
 	if !strings.HasPrefix(apiKey, "re_") || len(apiKey) < 8 {
-		return nil, fmt.Errorf("Resend API key is missing or invalid")
+		return nil, fmt.Errorf("resend API key is missing or invalid")
 	}
 	from := strings.TrimSpace(config.From)
 	address, err := mail.ParseAddress(from)
 	if err != nil || strings.TrimSpace(address.Address) == "" {
-		return nil, fmt.Errorf("Resend sender address is invalid")
+		return nil, fmt.Errorf("resend sender address is invalid")
 	}
 	endpoint := strings.TrimSpace(config.Endpoint)
 	if endpoint == "" {
@@ -85,10 +85,10 @@ func NewResendMailer(config ResendMailerConfig) (*ResendMailer, error) {
 	}
 	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || (parsed.Scheme != "https" && !(config.AllowHTTPForTests && parsed.Scheme == "http")) {
-		return nil, fmt.Errorf("Resend endpoint must be an HTTPS URL")
+		return nil, fmt.Errorf("resend endpoint must be an HTTPS URL")
 	}
 	if !config.AllowHTTPForTests && (parsed.Hostname() != "api.resend.com" || parsed.Path != "/emails" || parsed.RawQuery != "") {
-		return nil, fmt.Errorf("Resend endpoint must use the official email API")
+		return nil, fmt.Errorf("resend endpoint must use the official email API")
 	}
 	timeout := config.Timeout
 	if timeout <= 0 {
@@ -144,7 +144,7 @@ func (m *ResendMailer) SendVerification(message VerificationMessage) error {
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		// Provider response bodies can include addresses or operational details;
 		// return only the status so secrets and personal data stay out of logs.
-		return fmt.Errorf("Resend rejected verification email with HTTP %d", response.StatusCode)
+		return fmt.Errorf("resend rejected verification email with HTTP %d", response.StatusCode)
 	}
 	return nil
 }
