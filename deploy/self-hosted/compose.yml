@@ -1,0 +1,223 @@
+name: securestore
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/self-hosted/Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${SECURESTORE_HOST_PORT:-8088}:8080"
+    networks:
+      - application
+      - ingress
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/self-hosted/Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clamav-ready:
+        condition: service_completed_successfully
+    environment:
+      SECURESTORE_DEPLOYMENT_MODE: development
+      SECURESTORE_LISTEN_ADDR: 0.0.0.0:8080
+      SECURESTORE_PUBLIC_APP_URL: "http://127.0.0.1:${SECURESTORE_HOST_PORT:-8088}"
+      SECURESTORE_ALLOWED_ORIGINS: "http://127.0.0.1:${SECURESTORE_HOST_PORT:-8088},http://localhost:${SECURESTORE_HOST_PORT:-8088}"
+      SECURESTORE_SECURE_COOKIES: "false"
+      SECURESTORE_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      SECURESTORE_MAILBOX_DIR: /var/lib/securestore/mailbox
+      SECURESTORE_QUARANTINE_DIR: /var/lib/securestore/quarantine
+      SECURESTORE_PROTECTED_DIR: /var/lib/securestore/protected
+      SECURESTORE_AUDIT_HMAC_KEY_FILE: /run/secrets/audit_hmac_key
+      SECURESTORE_AUDIT_ANCHOR_KEY_FILE: /run/secrets/audit_anchor_key
+      SECURESTORE_AUDIT_ANCHOR_FILE: /var/lib/securestore/audit-checkpoints.jsonl
+      SECURESTORE_AUDIT_ANCHOR_PROVIDER: local
+      SECURESTORE_MFA_ENCRYPTION_KEY_FILE: /run/secrets/mfa_encryption_key
+      SECURESTORE_METRICS_TOKEN_FILE: /run/secrets/metrics_token
+      SECURESTORE_LOCAL_KEK_FILE: /run/secrets/local_kek
+      SECURESTORE_LOCAL_KEK_VERSION: v1
+      SECURESTORE_KEY_PROVIDER: local
+      SECURESTORE_SCANNER_MODE: clamd
+      SECURESTORE_CLAMD_NETWORK: tcp
+      SECURESTORE_CLAMD_ADDRESS: clamav:3310
+      SECURESTORE_CLAMD_DIAL_TIMEOUT_MS: "3000"
+      SECURESTORE_CLAMD_IO_TIMEOUT_MS: "30000"
+      SECURESTORE_CLAMD_MAX_SIGNATURE_AGE_HOURS: "24"
+      SECURESTORE_REQUIRE_PRIVILEGED_MFA: "true"
+      SECURESTORE_REQUIRE_ADMIN_STEP_UP: "true"
+      SECURESTORE_MAX_UPLOAD_BYTES: "26214400"
+      SECURESTORE_STORAGE_CAPACITY_BYTES: "53687091200"
+      SECURESTORE_STORAGE_RESERVE_BYTES: "5368709120"
+    secrets:
+      - postgres_password
+      - audit_hmac_key
+      - audit_anchor_key
+      - mfa_encryption_key
+      - local_kek
+      - metrics_token
+    volumes:
+      - securestore-data:/var/lib/securestore
+    networks:
+      - application
+      - database
+      - scanner
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: "2.0"
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  postgres:
+    image: postgres@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: securestore
+      POSTGRES_USER: securestore
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    networks:
+      - database
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: "2.0"
+    shm_size: 256m
+    stop_grace_period: 1m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U securestore -d securestore"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  clamav:
+    image: clamav/clamav:1.5.3-debian13-slim
+    restart: unless-stopped
+    environment:
+      TZ: UTC
+      CLAMAV_NO_CLAMD: "false"
+      CLAMAV_NO_FRESHCLAMD: "false"
+      FRESHCLAM_CHECKS: "24"
+    volumes:
+      - clamav-database:/var/lib/clamav
+      - ../clamav/clamd.conf:/etc/clamav/clamd.conf:ro
+      - ../clamav/freshclam.conf:/etc/clamav/freshclam.conf:ro
+    networks:
+      - scanner
+      - signature-updates
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 4g
+    cpus: "2.0"
+    stop_grace_period: 2m
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --ping=5 >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 2m
+
+  # FreshClam and ClamD start concurrently in the upstream image. On an empty
+  # or stale volume, FreshClam can finish immediately before the daemon socket
+  # exists, so its first NotifyClamd attempt is missed. This one-shot barrier
+  # reloads the downloaded database only after ClamD is healthy; the API cannot
+  # start until the barrier succeeds. Later FreshClam updates notify the already
+  # running daemon normally.
+  clamav-ready:
+    image: alpine:3.23.5
+    restart: "no"
+    depends_on:
+      clamav:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        response="$$(printf 'RELOAD\n' | nc -w 5 clamav 3310)"
+        test "$$response" = "RELOADING"
+        sleep 5
+        printf 'PING\n' | nc -w 5 clamav 3310 | grep -qx PONG
+    networks:
+      - scanner
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 32
+    mem_limit: 32m
+    cpus: "0.25"
+
+networks:
+  # Only the gateway joins a non-internal bridge so Docker can publish its
+  # loopback-bound port. The API remains reachable through the separate private
+  # application network and never joins this host-facing network.
+  ingress: {}
+  application:
+    internal: true
+  database:
+    internal: true
+  scanner:
+    internal: true
+  signature-updates: {}
+
+volumes:
+  postgres-data:
+  securestore-data:
+  clamav-database:
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  audit_hmac_key:
+    file: ./secrets/audit_hmac_key
+  audit_anchor_key:
+    file: ./secrets/audit_anchor_key
+  mfa_encryption_key:
+    file: ./secrets/mfa_encryption_key
+  local_kek:
+    file: ./secrets/local_kek
+  metrics_token:
+    file: ./secrets/metrics_token

@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1.18
+
+# The build image matches the minimum toolchain declared by go.mod. The final
+# image contains neither the compiler nor the source tree.
+FROM golang:1.26.6-alpine3.23 AS build
+
+WORKDIR /src
+ENV CGO_ENABLED=0
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd ./cmd
+COPY internal ./internal
+RUN go build -trimpath -ldflags="-s -w" -o /out/securestore ./cmd/server
+
+FROM alpine:3.23.5
+
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S -g 10001 securestore \
+    && adduser -S -D -H -u 10001 -G securestore securestore \
+    && mkdir -p /var/lib/securestore/mailbox \
+        /var/lib/securestore/quarantine \
+        /var/lib/securestore/protected \
+    && chown -R securestore:securestore /var/lib/securestore
+
+COPY --from=build /out/securestore /usr/local/bin/securestore
+COPY deploy/self-hosted/api-entrypoint.sh /usr/local/bin/securestore-entrypoint
+
+USER securestore:securestore
+WORKDIR /var/lib/securestore
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/securestore-entrypoint"]
