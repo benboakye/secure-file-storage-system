@@ -48,7 +48,11 @@ func run(logger *slog.Logger) error {
 	secureCookies := envBool("SECURESTORE_SECURE_COOKIES", false)
 	allowedOrigins := configuredOrigins(envString("SECURESTORE_ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173"))
 	databaseURL := envString("SECURESTORE_DATABASE_URL", "")
+	mailerMode := strings.ToLower(envString("SECURESTORE_MAILER_MODE", "file"))
 	mailboxDir := envString("SECURESTORE_MAILBOX_DIR", ".data/mailbox")
+	resendKeyFile := envString("SECURESTORE_RESEND_API_KEY_FILE", ".data/resend-api-key")
+	resendFrom := envString("SECURESTORE_RESEND_FROM", "SecureVault <no-reply@mail.securevault.tech>")
+	resendEndpoint := envString("SECURESTORE_RESEND_ENDPOINT", "https://api.resend.com/emails")
 	publicAppURL := envString("SECURESTORE_PUBLIC_APP_URL", "http://127.0.0.1:5173")
 	auditKeyFile := envString("SECURESTORE_AUDIT_HMAC_KEY_FILE", ".data/audit-hmac.key")
 	auditKeyVersion := envString("SECURESTORE_AUDIT_KEY_VERSION", "v1")
@@ -75,11 +79,12 @@ func run(logger *slog.Logger) error {
 	if err := validateDeployment(deploymentConfig{
 		Mode: deploymentMode, PublicAppURL: publicAppURL, DatabaseURL: databaseURL,
 		TLSCertificateFile: tlsCertificateFile, TLSKeyFile: tlsKeyFile,
-		ScannerMode: scannerMode, KeyProviderMode: keyProviderMode, AuditAnchorMode: auditAnchorMode,
-		AuditKeyFile: auditKeyFile, MFAKeyFile: mfaKeyFile, MetricsTokenFile: metricsTokenFile,
+		ScannerMode: scannerMode, KeyProviderMode: keyProviderMode, AuditAnchorMode: auditAnchorMode, MailerMode: mailerMode,
+		AuditKeyFile: auditKeyFile, MFAKeyFile: mfaKeyFile, MetricsTokenFile: metricsTokenFile, ResendKeyFile: resendKeyFile,
 		AuditKeyInjected:     strings.TrimSpace(os.Getenv("SECURESTORE_AUDIT_HMAC_KEY")) != "",
 		MFAKeyInjected:       strings.TrimSpace(os.Getenv("SECURESTORE_MFA_ENCRYPTION_KEY")) != "",
 		MetricsTokenInjected: strings.TrimSpace(os.Getenv("SECURESTORE_METRICS_BEARER_TOKEN")) != "",
+		ResendKeyInjected:    strings.TrimSpace(os.Getenv("SECURESTORE_RESEND_API_KEY")) != "",
 		AllowedOrigins:       allowedOrigins, SecureCookies: secureCookies,
 		RequirePrivilegedMFA: requirePrivilegedMFA, RequireAdminStepUp: requireAdminStepUp,
 	}); err != nil {
@@ -132,8 +137,30 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	metricsToken := base64.StdEncoding.EncodeToString(metricsTokenBytes)
+	var verificationMailer authn.VerificationMailer
+	switch mailerMode {
+	case "file":
+		verificationMailer = authn.FileMailer{Directory: mailboxDir}
+		logger.Warn("development filesystem verification mailer configured; internet delivery is disabled")
+	case "resend":
+		resendKey, secretErr := loadTextSecret(resendKeyFile, "SECURESTORE_RESEND_API_KEY")
+		if secretErr != nil {
+			return secretErr
+		}
+		resendMailer, mailerErr := authn.NewResendMailer(authn.ResendMailerConfig{
+			APIKey: resendKey, From: resendFrom, Endpoint: resendEndpoint,
+			Timeout: time.Duration(envInt64("SECURESTORE_RESEND_TIMEOUT_MS", 10000)) * time.Millisecond,
+		})
+		if mailerErr != nil {
+			return mailerErr
+		}
+		verificationMailer = resendMailer
+		logger.Info("verification mailer ready", "provider", "resend")
+	default:
+		return errors.New("SECURESTORE_MAILER_MODE must be file or resend")
+	}
 	authStore, err := authn.NewStoreWithConfig(authn.Config{
-		Repository: authRepository, Mailer: authn.FileMailer{Directory: mailboxDir},
+		Repository: authRepository, Mailer: verificationMailer,
 		SessionTTL: 8 * time.Hour, VerificationTTL: 30 * time.Minute,
 		VerificationMinResend: time.Minute, PublicAppURL: publicAppURL,
 		RequirePrivilegedMFA: requirePrivilegedMFA, MFAEncryptionKey: mfaKey, MFAIssuer: "SecureStore",
@@ -543,6 +570,21 @@ func loadSecretKey(path, environmentName, invalidMessage string) ([]byte, error)
 		return nil, err
 	}
 	return raw, nil
+}
+
+func loadTextSecret(path, environmentName string) (string, error) {
+	if value := strings.TrimSpace(os.Getenv(environmentName)); value != "" {
+		return value, nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", errors.New(environmentName + " is required through the environment or configured secret file")
+	}
+	value := strings.TrimSpace(string(content))
+	if value == "" {
+		return "", errors.New(environmentName + " secret file is empty")
+	}
+	return value, nil
 }
 
 func envString(name, fallback string) string {

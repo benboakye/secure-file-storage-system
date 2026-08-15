@@ -13,6 +13,7 @@ $requiredSecrets = @(
     'mfa_encryption_key',
     'local_kek',
     'metrics_token'
+    'resend_api_key'
 )
 
 foreach ($name in $requiredSecrets) {
@@ -24,6 +25,14 @@ foreach ($name in $requiredSecrets) {
         throw "Deployment secret is empty: $name"
     }
 }
+
+$resendKey = [System.IO.File]::ReadAllText(
+    (Join-Path (Join-Path $deploymentRoot 'secrets') 'resend_api_key')
+).Trim()
+if (-not $resendKey.StartsWith('re_') -or $resendKey.Length -lt 8) {
+    throw 'The Resend API key file does not contain a valid re_ prefixed key.'
+}
+$resendKey = $null
 
 docker compose -f $composeFile config --quiet
 if ($LASTEXITCODE -ne 0) {

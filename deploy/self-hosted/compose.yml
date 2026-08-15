@@ -48,7 +48,12 @@ services:
       SECURESTORE_ALLOWED_ORIGINS: "http://127.0.0.1:${SECURESTORE_HOST_PORT:-8088},http://localhost:${SECURESTORE_HOST_PORT:-8088}"
       SECURESTORE_SECURE_COOKIES: "false"
       SECURESTORE_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      SECURESTORE_MAILER_MODE: resend
       SECURESTORE_MAILBOX_DIR: /var/lib/securestore/mailbox
+      SECURESTORE_RESEND_API_KEY_FILE: /run/secrets/resend_api_key
+      SECURESTORE_RESEND_FROM: "SecureVault <no-reply@mail.securevault.tech>"
+      SECURESTORE_RESEND_ENDPOINT: https://api.resend.com/emails
+      SECURESTORE_RESEND_TIMEOUT_MS: "10000"
       SECURESTORE_QUARANTINE_DIR: /var/lib/securestore/quarantine
       SECURESTORE_PROTECTED_DIR: /var/lib/securestore/protected
       SECURESTORE_AUDIT_HMAC_KEY_FILE: /run/secrets/audit_hmac_key
@@ -78,12 +83,14 @@ services:
       - mfa_encryption_key
       - local_kek
       - metrics_token
+      - resend_api_key
     volumes:
       - securestore-data:/var/lib/securestore
     networks:
       - application
       - database
       - scanner
+      - email-delivery
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
@@ -202,6 +209,11 @@ networks:
   scanner:
     internal: true
   signature-updates: {}
+  # The API requires outbound HTTPS for transactional email. No inbound host
+  # port is published on this network; provider credentials remain a read-only
+  # secret mount. Docker Compose cannot restrict egress by DNS name, so host or
+  # upstream firewall policy remains the stronger production control.
+  email-delivery: {}
 
 volumes:
   postgres-data:
@@ -221,3 +233,5 @@ secrets:
     file: ./secrets/local_kek
   metrics_token:
     file: ./secrets/metrics_token
+  resend_api_key:
+    file: ./secrets/resend_api_key

@@ -11,14 +11,14 @@ This is not the public production profile. The API intentionally remains in `dev
 | Component | Host exposure | Persistent state | Network access |
 | --- | --- | --- | --- |
 | Gateway | `127.0.0.1:8088` by default | none | private application network |
-| API | none | encrypted objects, quarantine, local mailbox, local audit checkpoints | private application, database, and scanner networks |
+| API | none | encrypted objects, quarantine, local mailbox fallback, local audit checkpoints | private application, database, and scanner networks plus outbound email delivery |
 | PostgreSQL | none | `postgres-data` volume | private database network only |
 | ClamAV | none | signature database volume | private scanner network plus outbound signature updates |
 | ClamAV readiness barrier | none | none | private scanner network only; reloads startup signatures before API admission |
 
 The gateway and API run as non-root users with read-only root filesystems, dropped Linux capabilities, `no-new-privileges`, PID limits, memory limits, CPU limits, health checks, and `unless-stopped` restart policies. PostgreSQL and ClamAV are never published to the Windows host.
 
-Compose secrets are files protected by Windows ACLs and mounted read-only into containers. Docker Compose secrets do not provide the encrypted-at-rest secret management of a managed orchestrator, so this remains a single-owner local boundary.
+Compose secrets are files protected by Windows ACLs and mounted read-only into containers. The Resend credential is restricted to sending from `mail.securevault.tech`; it is installed through a masked prompt and is never placed in Compose YAML or shell history. Docker Compose secrets do not provide the encrypted-at-rest secret management of a managed orchestrator, so this remains a single-owner local boundary.
 
 ## First start
 
@@ -26,6 +26,7 @@ Run these commands from the repository root in PowerShell:
 
 ```powershell
 pwsh -File .\deploy\self-hosted\init-secrets.ps1
+pwsh -File .\deploy\self-hosted\set-resend-secret.ps1
 pwsh -File .\deploy\self-hosted\validate.ps1
 docker compose -f .\deploy\self-hosted\compose.yml build
 docker compose -f .\deploy\self-hosted\compose.yml up -d
@@ -36,7 +37,13 @@ ClamAV's first signature download can take several minutes. A one-shot readiness
 
 Open [http://127.0.0.1:8088](http://127.0.0.1:8088). To choose another loopback port for the current PowerShell session, set `$env:SECURESTORE_HOST_PORT` before starting the stack.
 
-## Local verification email
+## Verification email delivery
+
+The Docker profile uses Resend over outbound HTTPS and sends from `SecureVault <no-reply@mail.securevault.tech>`. Rotate the provider key by creating a replacement sending-only, domain-restricted key, running `set-resend-secret.ps1 -Replace`, recreating the API container, testing delivery, and then revoking the old key in Resend.
+
+The filesystem adapter remains available for explicit non-Docker development by setting `SECURESTORE_MAILER_MODE=file`. Its mailbox operations are documented below for controlled fallback testing.
+
+### Filesystem fallback
 
 The filesystem mailbox is retained for this stage. List messages without printing their contents into container logs:
 
@@ -72,8 +79,7 @@ docker compose -f .\deploy\self-hosted\compose.yml stop
 
 ## Remaining deployment stages
 
-1. Add the Resend HTTPS mail adapter and rotate from the filesystem mailbox.
-2. Add a named Cloudflare Tunnel and separate public/privileged host routing.
-3. Define and test Windows boot startup rather than relying only on interactive sign-in.
-4. Connect managed key custody, independent audit anchoring, external monitoring, verified PostgreSQL TLS, and approved TLS boundaries.
-5. Implement and test backup/recovery later, as explicitly deferred in the release plan.
+1. Add a named Cloudflare Tunnel and separate public/privileged host routing.
+2. Define and test Windows boot startup rather than relying only on interactive sign-in.
+3. Connect managed key custody, independent audit anchoring, external monitoring, verified PostgreSQL TLS, and approved TLS boundaries.
+4. Implement and test backup/recovery later, as explicitly deferred in the release plan.

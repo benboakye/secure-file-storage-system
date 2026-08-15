@@ -7,13 +7,13 @@ import (
 )
 
 type deploymentConfig struct {
-	Mode, PublicAppURL, DatabaseURL                         string
-	TLSCertificateFile, TLSKeyFile                          string
-	ScannerMode, KeyProviderMode, AuditAnchorMode           string
-	AuditKeyFile, MFAKeyFile, MetricsTokenFile              string
-	AuditKeyInjected, MFAKeyInjected, MetricsTokenInjected  bool
-	AllowedOrigins                                          []string
-	SecureCookies, RequirePrivilegedMFA, RequireAdminStepUp bool
+	Mode, PublicAppURL, DatabaseURL                                           string
+	TLSCertificateFile, TLSKeyFile                                            string
+	ScannerMode, KeyProviderMode, AuditAnchorMode, MailerMode                 string
+	AuditKeyFile, MFAKeyFile, MetricsTokenFile, ResendKeyFile                 string
+	AuditKeyInjected, MFAKeyInjected, MetricsTokenInjected, ResendKeyInjected bool
+	AllowedOrigins                                                            []string
+	SecureCookies, RequirePrivilegedMFA, RequireAdminStepUp                   bool
 }
 
 func validateDeployment(config deploymentConfig) error {
@@ -36,6 +36,9 @@ func validateDeployment(config deploymentConfig) error {
 	if config.ScannerMode != "clamd" || config.KeyProviderMode != "remote" || config.AuditAnchorMode != "remote" {
 		return errors.New("production requires clamd, remote key custody, and remote audit anchoring")
 	}
+	if config.MailerMode != "resend" {
+		return errors.New("production requires the Resend delivery adapter")
+	}
 	if err := requireHTTPSURL(config.PublicAppURL, true); err != nil {
 		return errors.New("production public application URL must be an HTTPS origin")
 	}
@@ -57,6 +60,7 @@ func validateDeployment(config deploymentConfig) error {
 		"audit HMAC":     {config.AuditKeyFile, config.AuditKeyInjected},
 		"MFA encryption": {config.MFAKeyFile, config.MFAKeyInjected},
 		"metrics bearer": {config.MetricsTokenFile, config.MetricsTokenInjected},
+		"Resend API":     {config.ResendKeyFile, config.ResendKeyInjected},
 	} {
 		if !source.injected && isDevelopmentSecretPath(source.path) {
 			return errors.New("production " + name + " secret must be injected or mounted outside .data")
