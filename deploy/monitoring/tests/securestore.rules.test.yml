@@ -1,0 +1,155 @@
+rule_files:
+  - ../rules/securestore.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: target-down-honors-hold-period
+    interval: 1m
+    input_series:
+      - series: 'up{job="securestore-api",instance="api-1:8443"}'
+        values: '0x6'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SecureStoreTargetDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: SecureStoreTargetDown
+        exp_alerts:
+          - exp_labels:
+              instance: api-1:8443
+              job: securestore-api
+              service: securestore
+              severity: critical
+              team: platform-security
+            exp_annotations:
+              summary: SecureStore metrics target is unavailable
+              description: Prometheus has been unable to complete a SecureStore scrape for two minutes.
+              runbook_ref: monitoring-runbook.md#securestoretargetdown
+
+  - name: missing-protected-object-becomes-critical
+    interval: 1m
+    input_series:
+      - series: 'securestore_protected_missing_objects{job="securestore-api",instance="api-1:8443"}'
+        values: '1x6'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SecureStoreProtectedObjectMissing
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: SecureStoreProtectedObjectMissing
+        exp_alerts:
+          - exp_labels:
+              instance: api-1:8443
+              job: securestore-api
+              service: securestore
+              severity: critical
+              team: platform-security
+            exp_annotations:
+              summary: Protected metadata references a missing encrypted object
+              description: At least one protected-file metadata record cannot be reconciled with encrypted storage.
+              runbook_ref: monitoring-runbook.md#securestoreprotectedobjectmissing
+
+  - name: connected-scanner-with-stale-signatures-becomes-critical
+    interval: 1m
+    input_series:
+      - series: 'securestore_scanner_connected{job="securestore-api",instance="api-1:8443"}'
+        values: '1x8'
+      - series: 'securestore_scanner_signatures_fresh{job="securestore-api",instance="api-1:8443"}'
+        values: '0x8'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SecureStoreScannerSignaturesStale
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: SecureStoreScannerSignaturesStale
+        exp_alerts:
+          - exp_labels:
+              instance: api-1:8443
+              job: securestore-api
+              service: securestore
+              severity: critical
+              team: platform-security
+            exp_annotations:
+              summary: SecureStore scanner signatures are stale or unverifiable
+              description: ClamD is reachable but its database timestamp is outside the approved freshness policy.
+              runbook_ref: monitoring-runbook.md#securestorescannersignaturesstale
+
+  - name: capacity-pressure-excludes-safety-reserve
+    interval: 1m
+    input_series:
+      - series: 'securestore_capacity_configured_bytes{job="securestore-api",instance="api-1:8443"}'
+        values: '100x20'
+      - series: 'securestore_capacity_safety_reserve_bytes{job="securestore-api",instance="api-1:8443"}'
+        values: '10x20'
+      - series: 'securestore_protected_ciphertext_bytes{job="securestore-api",instance="api-1:8443"}'
+        values: '80x20'
+      - series: 'securestore_capacity_reserved_bytes{job="securestore-api",instance="api-1:8443"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: SecureStoreCapacityPressure
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: SecureStoreCapacityPressure
+        exp_alerts:
+          - exp_labels:
+              instance: api-1:8443
+              job: securestore-api
+              service: securestore
+              severity: warning
+              team: platform-security
+            exp_annotations:
+              summary: SecureStore admissible capacity is above 85 percent
+              description: Protected ciphertext plus active reservations has consumed more than 85 percent of capacity available outside the safety reserve.
+              runbook_ref: monitoring-runbook.md#securestorecapacitypressure
+
+  - name: non-hardware-key-custody-becomes-critical
+    interval: 1m
+    input_series:
+      - series: 'securestore_key_service_production_ready{job="securestore-api",instance="api-1:8443"}'
+        values: '0x8'
+      - series: 'securestore_key_service_hardware_backed{job="securestore-api",instance="api-1:8443"}'
+        values: '0x8'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SecureStoreKeyCustodyNotProductionReady
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: SecureStoreKeyCustodyNotProductionReady
+        exp_alerts:
+          - exp_labels:
+              instance: api-1:8443
+              job: securestore-api
+              service: securestore
+              severity: critical
+              team: platform-security
+            exp_annotations:
+              summary: SecureStore key custody does not satisfy production policy
+              description: The active wrapping key is not both enabled and hardware-backed through the managed key service.
+              runbook_ref: monitoring-runbook.md#securestorekeycustodynotproductionready
+
+  - name: lagging-audit-anchor-becomes-critical
+    interval: 1m
+    input_series:
+      - series: 'securestore_audit_anchor_valid{job="securestore-api",instance="api-1:8443"}'
+        values: '1x6'
+      - series: 'securestore_audit_anchor_lag_events{job="securestore-api",instance="api-1:8443"}'
+        values: '2x6'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SecureStoreAuditAnchorInvalidOrLagging
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: SecureStoreAuditAnchorInvalidOrLagging
+        exp_alerts:
+          - exp_labels:
+              instance: api-1:8443
+              job: securestore-api
+              service: securestore
+              severity: critical
+              team: platform-security
+            exp_annotations:
+              summary: SecureStore audit anchor receipt is invalid or lagging
+              description: The trusted receipt does not agree with the current audit checkpoint or is behind verified events.
+              runbook_ref: monitoring-runbook.md#securestoreauditanchorinvalidorlagging

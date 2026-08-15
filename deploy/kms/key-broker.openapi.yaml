@@ -1,0 +1,144 @@
+openapi: 3.1.0
+info:
+  title: SecureStore managed key broker contract
+  version: 1.0.0
+  description: Provider-neutral, mutually authenticated boundary for hardware-backed DEK wrapping. Request and response bodies must never be logged.
+servers:
+  - url: https://securestore-key-broker.internal:8443
+security:
+  - mutualTLS: []
+paths:
+  /v1/status:
+    get:
+      operationId: keyStatus
+      summary: Return safe custody posture for one exact wrapping-key version
+      parameters:
+        - $ref: '#/components/parameters/KeyId'
+        - $ref: '#/components/parameters/KeyVersion'
+      responses:
+        '200':
+          description: Safe key posture
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StatusResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /v1/wrap:
+    post:
+      operationId: wrapDek
+      summary: Wrap one 256-bit DEK under the exact enabled key version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WrapRequest' }
+      responses:
+        '200':
+          description: Wrapped DEK and authoritative key identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WrapResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /v1/unwrap:
+    post:
+      operationId: unwrapDek
+      summary: Unwrap one DEK using the exact historical key identity in its envelope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UnwrapRequest' }
+      responses:
+        '200':
+          description: Exactly one 256-bit plaintext DEK and authoritative key identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnwrapResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+components:
+  securitySchemes:
+    mutualTLS:
+      type: mutualTLS
+  parameters:
+    KeyId:
+      name: keyId
+      in: query
+      required: true
+      schema: { $ref: '#/components/schemas/KeyToken' }
+    KeyVersion:
+      name: keyVersion
+      in: query
+      required: true
+      schema: { $ref: '#/components/schemas/KeyToken' }
+  schemas:
+    KeyToken:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: '^[A-Za-z0-9._:-]+$'
+    Purpose:
+      type: string
+      const: securestore-envelope-dek-v1
+    EncodedBytes:
+      type: string
+      contentEncoding: base64
+    WrapRequest:
+      type: object
+      additionalProperties: false
+      required: [keyId, keyVersion, purpose, plaintextDek]
+      properties:
+        keyId: { $ref: '#/components/schemas/KeyToken' }
+        keyVersion: { $ref: '#/components/schemas/KeyToken' }
+        purpose: { $ref: '#/components/schemas/Purpose' }
+        plaintextDek: { $ref: '#/components/schemas/EncodedBytes' }
+    WrapResponse:
+      type: object
+      additionalProperties: false
+      required: [keyId, keyVersion, wrappedDek]
+      properties:
+        keyId: { $ref: '#/components/schemas/KeyToken' }
+        keyVersion: { $ref: '#/components/schemas/KeyToken' }
+        wrappedDek: { $ref: '#/components/schemas/EncodedBytes' }
+    UnwrapRequest:
+      type: object
+      additionalProperties: false
+      required: [keyId, keyVersion, purpose, wrappedDek]
+      properties:
+        keyId: { $ref: '#/components/schemas/KeyToken' }
+        keyVersion: { $ref: '#/components/schemas/KeyToken' }
+        purpose: { $ref: '#/components/schemas/Purpose' }
+        wrappedDek: { $ref: '#/components/schemas/EncodedBytes' }
+    UnwrapResponse:
+      type: object
+      additionalProperties: false
+      required: [keyId, keyVersion, plaintextDek]
+      properties:
+        keyId: { $ref: '#/components/schemas/KeyToken' }
+        keyVersion: { $ref: '#/components/schemas/KeyToken' }
+        plaintextDek: { $ref: '#/components/schemas/EncodedBytes' }
+    StatusResponse:
+      type: object
+      additionalProperties: false
+      required: [keyId, keyVersion, status, provider, hardwareBacked]
+      properties:
+        keyId: { $ref: '#/components/schemas/KeyToken' }
+        keyVersion: { $ref: '#/components/schemas/KeyToken' }
+        status: { type: string, enum: [enabled, disabled, pending_deletion] }
+        provider: { type: string, minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9._:-]+$' }
+        hardwareBacked: { type: boolean }
+  responses:
+    BadRequest:
+      description: Invalid bounded request
+    Unauthorized:
+      description: Client workload identity is missing or invalid
+    Forbidden:
+      description: Workload identity is not authorized for the exact operation and key version
+    Unavailable:
+      description: Key operation unavailable; no provider diagnostic is returned

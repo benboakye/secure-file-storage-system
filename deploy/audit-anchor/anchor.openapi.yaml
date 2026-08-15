@@ -1,0 +1,116 @@
+openapi: 3.1.0
+info:
+  title: SecureStore immutable audit-anchor contract
+  version: 1.0.0
+  description: Minimal mutually authenticated boundary for independently stored, server-attested audit checkpoint receipts.
+servers:
+  - url: https://securestore-audit-anchor.internal:8443
+security:
+  - mutualTLS: []
+paths:
+  /v1/status:
+    get:
+      operationId: anchorStatus
+      summary: Return safe immutable-ledger posture without checkpoint material
+      responses:
+        '200':
+          description: Safe ledger posture
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StatusResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /v1/checkpoints:
+    post:
+      operationId: appendCheckpoint
+      summary: Append one exact checkpoint and return a server-attested receipt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckpointRequest' }
+      responses:
+        '201':
+          description: Immutable checkpoint receipt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckpointReceipt' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Sequence is not strictly monotonic or conflicts with retained evidence
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /v1/checkpoints/latest:
+    get:
+      operationId: latestCheckpoint
+      summary: Return the latest server-attested receipt for one exact chain
+      parameters:
+        - name: chainId
+          in: query
+          required: true
+          schema: { type: string, const: securestore-main-v2 }
+      responses:
+        '200':
+          description: Latest immutable checkpoint receipt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckpointReceipt' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: No checkpoint exists for the exact chain
+        '503': { $ref: '#/components/responses/Unavailable' }
+components:
+  securitySchemes:
+    mutualTLS:
+      type: mutualTLS
+  schemas:
+    SafeToken:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: '^[A-Za-z0-9._:-]+$'
+    CheckpointRequest:
+      type: object
+      additionalProperties: false
+      required: [chainId, sequence, checkpoint, previousCheckpoint, keyVersion, anchoredAt]
+      properties:
+        chainId: { type: string, const: securestore-main-v2 }
+        sequence: { type: integer, format: int64, minimum: 1, maximum: 4611686018427387904 }
+        checkpoint: { type: string, minLength: 32, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+        previousCheckpoint: { type: string, minLength: 32, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+        keyVersion: { $ref: '#/components/schemas/SafeToken' }
+        anchoredAt: { type: string, format: date-time }
+    CheckpointReceipt:
+      type: object
+      additionalProperties: false
+      required: [chainId, sequence, checkpoint, previousCheckpoint, keyVersion, anchoredAt, signature]
+      properties:
+        chainId: { type: string, const: securestore-main-v2 }
+        sequence: { type: integer, format: int64, minimum: 1, maximum: 4611686018427387904 }
+        checkpoint: { type: string, minLength: 32, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+        previousCheckpoint: { type: string, minLength: 32, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+        keyVersion: { $ref: '#/components/schemas/SafeToken' }
+        anchoredAt: { type: string, format: date-time }
+        signature: { type: string, minLength: 86, maxLength: 86, pattern: '^[A-Za-z0-9_-]+$' }
+    StatusResponse:
+      type: object
+      additionalProperties: false
+      required: [status, provider, immutable, independentlyAdministered, serverAttested]
+      properties:
+        status: { type: string, enum: [enabled, disabled, read_only] }
+        provider: { $ref: '#/components/schemas/SafeToken' }
+        immutable: { type: boolean }
+        independentlyAdministered: { type: boolean }
+        serverAttested: { type: boolean }
+  responses:
+    BadRequest:
+      description: Invalid bounded checkpoint request
+    Unauthorized:
+      description: Client workload identity is missing or invalid
+    Forbidden:
+      description: Workload identity is not authorized for the operation
+    Unavailable:
+      description: Anchor operation unavailable; no provider diagnostic is returned

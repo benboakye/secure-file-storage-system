@@ -1,0 +1,44 @@
+# SecureStore production monitoring template.
+# Replace internal DNS names for the target environment. Credentials and CA
+# material are mounted files and must never be written directly into this YAML.
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+  external_labels:
+    product: securestore
+    environment: production
+
+rule_files:
+  - /etc/prometheus/rules/*.rules.yml
+
+# Alertmanager is an internal control-plane dependency. Its receivers (email,
+# paging, or incident-management systems) are configured separately after the
+# organization approves a notification destination.
+alerting:
+  alertmanagers:
+    - scheme: https
+      static_configs:
+        - targets:
+            - alertmanager.internal:9093
+      tls_config:
+        ca_file: /etc/prometheus/tls/monitoring-ca.pem
+        server_name: alertmanager.internal
+        min_version: TLS12
+
+scrape_configs:
+  - job_name: securestore-api
+    metrics_path: /metrics
+    scheme: https
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/securestore-metrics-token
+    tls_config:
+      ca_file: /etc/prometheus/tls/securestore-ca.pem
+      server_name: securestore-api.internal
+      min_version: TLS12
+    static_configs:
+      - targets:
+          - securestore-api.internal:8443
+        labels:
+          service: securestore

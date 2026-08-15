@@ -1,0 +1,264 @@
+groups:
+  - name: securestore.availability
+    interval: 30s
+    rules:
+      - alert: SecureStoreTargetDown
+        expr: up{job="securestore-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore metrics target is unavailable
+          description: Prometheus has been unable to complete a SecureStore scrape for two minutes.
+          runbook_ref: monitoring-runbook.md#securestoretargetdown
+
+      - alert: SecureStoreMetricsTargetMissing
+        expr: absent(up{job="securestore-api"})
+        for: 5m
+        labels:
+          severity: critical
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore target is absent from service discovery
+          description: No SecureStore target series exists; verify collector configuration and deployment discovery.
+          runbook_ref: monitoring-runbook.md#securestoremetricstargetmissing
+
+      - alert: SecureStoreElevatedServerErrors
+        expr: |
+          (
+            sum by (job, instance) (rate(securestore_http_requests_total{job="securestore-api",status_class="5xx"}[5m]))
+            /
+            clamp_min(sum by (job, instance) (rate(securestore_http_requests_total{job="securestore-api"}[5m])), 0.001)
+          ) > 0.05
+          and
+          sum by (job, instance) (increase(securestore_http_requests_total{job="securestore-api"}[5m])) >= 20
+        for: 10m
+        labels:
+          severity: warning
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore server-error ratio is elevated
+          description: More than five percent of at least twenty recent requests returned a 5xx status for ten minutes.
+          runbook_ref: monitoring-runbook.md#securestoreelevatedservererrors
+
+      - alert: SecureStoreSustainedRequestLatency
+        expr: |
+          (
+            sum by (job, instance) (rate(securestore_http_request_duration_seconds_sum{job="securestore-api"}[5m]))
+            /
+            clamp_min(sum by (job, instance) (rate(securestore_http_request_duration_seconds_count{job="securestore-api"}[5m])), 0.001)
+          ) > 1
+          and
+          sum by (job, instance) (increase(securestore_http_request_duration_seconds_count{job="securestore-api"}[5m])) >= 20
+        for: 10m
+        labels:
+          severity: warning
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore request latency is persistently high
+          description: Mean request duration exceeded one second under meaningful traffic for ten minutes.
+          runbook_ref: monitoring-runbook.md#securestoresustainedrequestlatency
+
+  - name: securestore.security-and-integrity
+    interval: 30s
+    rules:
+      - alert: SecureStoreScannerNotProductionReady
+        expr: securestore_scanner_production_ready{job="securestore-api"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore scanner is not production-ready
+          description: The active inspection adapter lacks verified production malware-engine posture.
+          runbook_ref: monitoring-runbook.md#securestorescannernotproductionready
+
+      - alert: SecureStoreScannerSignaturesStale
+        expr: |
+          securestore_scanner_connected{job="securestore-api"} == 1
+          and
+          securestore_scanner_signatures_fresh{job="securestore-api"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore scanner signatures are stale or unverifiable
+          description: ClamD is reachable but its database timestamp is outside the approved freshness policy.
+          runbook_ref: monitoring-runbook.md#securestorescannersignaturesstale
+
+      - alert: SecureStoreRepositoryNotDurable
+        expr: |
+          securestore_ingestion_repository_durable{job="securestore-api"} == 0
+          or
+          securestore_protected_repository_durable{job="securestore-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore repository is not durable
+          description: Ingestion or protected-file metadata is using a non-durable repository.
+          runbook_ref: monitoring-runbook.md#securestorerepositorynotdurable
+
+      - alert: SecureStoreKeyServiceUnavailable
+        expr: securestore_key_service_connected{job="securestore-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore managed key service is unavailable
+          description: The key-service control plane cannot provide verified wrap and unwrap custody evidence.
+          runbook_ref: monitoring-runbook.md#securestorekeyserviceunavailable
+
+      - alert: SecureStoreKeyCustodyNotProductionReady
+        expr: |
+          securestore_key_service_production_ready{job="securestore-api"} == 0
+          or
+          securestore_key_service_hardware_backed{job="securestore-api"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore key custody does not satisfy production policy
+          description: The active wrapping key is not both enabled and hardware-backed through the managed key service.
+          runbook_ref: monitoring-runbook.md#securestorekeycustodynotproductionready
+
+      - alert: SecureStoreProtectedObjectMissing
+        expr: securestore_protected_missing_objects{job="securestore-api"} > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: Protected metadata references a missing encrypted object
+          description: At least one protected-file metadata record cannot be reconciled with encrypted storage.
+          runbook_ref: monitoring-runbook.md#securestoreprotectedobjectmissing
+
+      - alert: SecureStoreAuditEvidenceBacklog
+        expr: securestore_audit_pending_evidence{job="securestore-api"} > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore audit evidence delivery is delayed
+          description: Committed audit intents have remained outside the signed chain for at least ten minutes.
+          runbook_ref: monitoring-runbook.md#securestoreauditevidencebacklog
+
+      - alert: SecureStoreAuditAnchorUnavailable
+        expr: securestore_audit_anchor_connected{job="securestore-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore independent audit anchor is unavailable
+          description: The API cannot obtain trusted checkpoint-ledger posture or receipts.
+          runbook_ref: monitoring-runbook.md#securestoreauditanchorunavailable
+
+      - alert: SecureStoreAuditAnchorNotProductionReady
+        expr: securestore_audit_anchor_production_ready{job="securestore-api"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore audit anchoring does not satisfy production policy
+          description: Independent administration, immutability, and server-attested receipts are not all confirmed.
+          runbook_ref: monitoring-runbook.md#securestoreauditanchornotproductionready
+
+      - alert: SecureStoreAuditAnchorInvalidOrLagging
+        expr: |
+          securestore_audit_anchor_valid{job="securestore-api"} == 0
+          or
+          securestore_audit_anchor_lag_events{job="securestore-api"} > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore audit anchor receipt is invalid or lagging
+          description: The trusted receipt does not agree with the current audit checkpoint or is behind verified events.
+          runbook_ref: monitoring-runbook.md#securestoreauditanchorinvalidorlagging
+
+  - name: securestore.capacity-and-processing
+    interval: 30s
+    rules:
+      - alert: SecureStoreIngestionFailures
+        expr: securestore_ingestion_failed_records{job="securestore-api"} > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore has durable ingestion failures
+          description: At least one upload remains in the failed lifecycle state.
+          runbook_ref: monitoring-runbook.md#securestoreingestionfailures
+
+      - alert: SecureStoreProcessingBacklog
+        expr: securestore_ingestion_pending_records{job="securestore-api"} > 10
+        for: 10m
+        labels:
+          severity: warning
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore processing queue is persistently elevated
+          description: More than ten uploads have awaited a terminal lifecycle state for ten minutes.
+          runbook_ref: monitoring-runbook.md#securestoreprocessingbacklog
+
+      - alert: SecureStoreCapacityPressure
+        expr: |
+          (
+            securestore_protected_ciphertext_bytes{job="securestore-api"}
+            + securestore_capacity_reserved_bytes{job="securestore-api"}
+          )
+          /
+          clamp_min(
+            securestore_capacity_configured_bytes{job="securestore-api"}
+            - securestore_capacity_safety_reserve_bytes{job="securestore-api"},
+            1
+          ) > 0.85
+        for: 15m
+        labels:
+          severity: warning
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore admissible capacity is above 85 percent
+          description: Protected ciphertext plus active reservations has consumed more than 85 percent of capacity available outside the safety reserve.
+          runbook_ref: monitoring-runbook.md#securestorecapacitypressure
+
+      - alert: SecureStoreOrphanObjectsDetected
+        expr: |
+          securestore_quarantine_orphan_objects{job="securestore-api"} > 0
+          or
+          securestore_protected_orphan_objects{job="securestore-api"} > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: securestore
+          team: platform-security
+        annotations:
+          summary: SecureStore orphan objects require administrator review
+          description: Quarantine or protected storage contains objects that do not match active metadata.
+          runbook_ref: monitoring-runbook.md#securestoreorphanobjectsdetected

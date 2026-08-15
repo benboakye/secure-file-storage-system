@@ -1,0 +1,32 @@
+# Production-oriented ClamAV service fragment. It intentionally publishes no
+# host port: SecureStore must join the private securestore-scanner network.
+services:
+  clamav:
+    image: "clamav/clamav:${CLAMAV_FEATURE_TAG:?set an approved supported ClamAV feature tag}"
+    restart: unless-stopped
+    environment:
+      TZ: UTC
+      CLAMAV_NO_CLAMD: "false"
+      CLAMAV_NO_FRESHCLAMD: "false"
+      FRESHCLAM_CHECKS: "24"
+    volumes:
+      - clamav-database:/var/lib/clamav
+      - ./clamd.conf:/etc/clamav/clamd.conf:ro
+      - ./freshclam.conf:/etc/clamav/freshclam.conf:ro
+    networks:
+      - scanner
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 4g
+    cpus: "2.0"
+    stop_grace_period: 2m
+
+networks:
+  scanner:
+    name: securestore-scanner
+    driver: bridge
+
+volumes:
+  clamav-database:
+    name: securestore-clamav-database
