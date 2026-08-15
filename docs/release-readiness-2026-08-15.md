@@ -21,6 +21,8 @@
 | PostgreSQL integration execution | PASS | All nine opt-in tests passed against an isolated PostgreSQL 18 database using a loopback-only ephemeral port and memory-backed storage. See `docs/postgresql-integration-verification-2026-08-15.md`. |
 | Revision control | PASS | The audited initial baseline was committed locally as `0b110d4` after generated artifacts, runtime data, exports, environment overrides, and local screenshots were excluded. |
 | Continuous integration | PASS locally and remotely | The read-only GitHub Actions workflow passed actionlint v1.7.12 locally. Remote run [31876728937](https://github.com/benboakye/secure-file-storage-system/actions/runs/31876728937) passed all three jobs: backend/PostgreSQL/security analysis, the race-enabled PostgreSQL suite, and frontend tests/audit/build. Screenshot evidence is retained in `docs/testing/evidence/github-actions-run-31876728937-success.png`. |
+| Self-hosted Docker foundation | PASS for local evaluation | The loopback-only gateway, Go API, PostgreSQL, ClamAV, persistent volumes, private networks, file-mounted secrets, health checks, and ClamAV startup barrier passed build, cold-start, isolation, browser, header, and restart checks. See `docs/self-hosted-docker-verification-2026-08-15.md`. This does not change the production-readiness decision. |
+| Resend transactional delivery | PASS for local evaluation | The verified `mail.securevault.tech` sending subdomain, domain-restricted key, masked secret installation, HTTPS adapter, Docker egress boundary, automated tests, runtime initialization, and live verification-email delivery passed. See `docs/resend-email-adapter-verification-2026-08-15.md`. Public links still require the Cloudflare HTTPS origin. |
 
 ## Corrections made during this stage
 
@@ -63,7 +65,7 @@ The database ran from the pinned official PostgreSQL 18 Alpine image with memory
 
 ## External deployment blockers
 
-- approved ClamAV/ClamD image and isolated runtime with fresh signature evidence;
+- production approval of the locally verified ClamAV/ClamD image, update policy, and operational monitoring;
 - managed KMS/HSM provider with non-exportable keys and workload mTLS identity;
 - independently administered immutable audit checkpoint ledger;
 - production TLS certificates, secure cookies, exact HTTPS origins, and hardening headers;
@@ -71,12 +73,12 @@ The database ran from the pinned official PostgreSQL 18 Alpine image with memory
 - externally injected production secrets rather than `.data` files;
 - deployed metrics collector, alert routing, and recent-scrape evidence;
 - backup provider, backup monitoring, and disaster-recovery evidence remain explicitly deferred;
-- Resend or another approved external email-delivery service for non-local verification messages.
+- public-origin Resend verification, expiry, replay, resend, bounce, and suppression evidence after Cloudflare publication.
 
-Docker Compose packaging, Cloudflare Tunnel publication, Windows automatic startup, and the Resend adapter are intentionally deferred to the self-hosted deployment stage documented in `docs/deferred-self-hosted-deployment.md`.
+The loopback-only Docker Compose foundation and Resend adapter are implemented and locally verified. Cloudflare Tunnel publication and Windows automatic startup remain deferred deployment stages documented in `docs/deferred-self-hosted-deployment.md`.
 
 ## Required next actions
 
 1. Merge only through the documented manual pull-request gate while the private repository remains on GitHub Free; all three CI jobs must pass before merge. Enable enforced branch protection if the repository later moves to a plan that supports it for private repositories.
-2. Implement the deferred self-hosted Docker, Cloudflare Tunnel, Windows startup, and Resend deployment package.
+2. Add the named Cloudflare Tunnel and Windows boot-start integration without weakening the local service-isolation boundaries, then repeat Resend tests against the public HTTPS origin.
 3. Configure and verify the remaining external deployment boundaries before changing the readiness decision.

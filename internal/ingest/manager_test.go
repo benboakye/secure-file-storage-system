@@ -27,6 +27,58 @@ func (scanner gatedScanner) Inspect(ctx context.Context, _ Evidence) (ScanResult
 	}
 }
 
+// blockingAcceptedRepository makes the durability boundary observable without
+// relying on scheduler or database timing. It pauses only the accepted update.
+type blockingAcceptedRepository struct {
+	*MemoryRepository
+	acceptedStarted chan struct{}
+	releaseAccepted chan struct{}
+	once            sync.Once
+}
+
+func (repository *blockingAcceptedRepository) Update(record persistedRecord) error {
+	if record.Status == StatusAccepted {
+		repository.once.Do(func() { close(repository.acceptedStarted) })
+		<-repository.releaseAccepted
+	}
+	return repository.MemoryRepository.Update(record)
+}
+
+func TestTerminalStateIsHiddenUntilRepositoryCommit(t *testing.T) {
+	repository := &blockingAcceptedRepository{
+		MemoryRepository: NewMemoryRepository(),
+		acceptedStarted:  make(chan struct{}),
+		releaseAccepted:  make(chan struct{}),
+	}
+	manager, err := NewManager(Config{
+		QuarantineDir: t.TempDir(), MaxUploadBytes: 1024,
+		InspectionTTL: time.Second, Scanner: DeterministicScanner{}, Repository: repository,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload, _, err := manager.Create(context.Background(), "usr_durability", "idem-durability", "proof.txt", "text/plain", strings.NewReader("proof"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-repository.acceptedStarted:
+	case <-time.After(time.Second):
+		t.Fatal("accepted persistence was not attempted")
+	}
+	visible, err := manager.Get("usr_durability", upload.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if visible.Status != StatusInspecting {
+		t.Fatalf("terminal state became visible before persistence: %s", visible.Status)
+	}
+	close(repository.releaseAccepted)
+	if terminal := waitForTerminal(t, manager, "usr_durability", upload.ID); terminal.Status != StatusAccepted {
+		t.Fatalf("unexpected terminal status after persistence: %s", terminal.Status)
+	}
+}
+
 func TestLifecycleOutcomes(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -935,24 +935,26 @@ func (m *Manager) inspect(uploadID string) {
 		m.mu.Unlock()
 		return
 	}
-	entry.Progress = 100
+	// Build the completed state without publishing it to readers. PostgreSQL
+	// and its audit outbox must commit before Get can report a terminal result.
+	terminal := entry.persisted()
+	terminal.Progress = 100
 	switch {
 	case err != nil:
-		entry.Status = StatusFailed
-		entry.DecisionReason = "inspection_unavailable"
+		terminal.Status = StatusFailed
+		terminal.DecisionReason = "inspection_unavailable"
 	case !result.Accepted:
-		entry.Status = StatusRejected
-		entry.DecisionReason = result.Reason
+		terminal.Status = StatusRejected
+		terminal.DecisionReason = result.Reason
 	default:
-		entry.Status = StatusAccepted
-		entry.DecisionReason = "policy_accepted"
+		terminal.Status = StatusAccepted
+		terminal.DecisionReason = "policy_accepted"
 		if m.protectedStore != nil {
-			entry.Progress = 75
+			terminal.Progress = 75
 		}
 	}
 	path := entry.QuarantinePath
-	removePlaintext := entry.Status == StatusRejected || entry.Status == StatusFailed
-	terminal := entry.persisted()
+	removePlaintext := terminal.Status == StatusRejected || terminal.Status == StatusFailed
 	m.mu.Unlock()
 	inspectionOutcome := "success"
 	if terminal.Status == StatusRejected {
@@ -966,6 +968,14 @@ func (m *Manager) inspect(uploadID string) {
 		m.failPersistence(uploadID)
 		return
 	}
+	m.mu.Lock()
+	entry, exists = m.uploads[uploadID]
+	if !exists {
+		m.mu.Unlock()
+		return
+	}
+	entry.Upload = terminal.Upload
+	m.mu.Unlock()
 	if removePlaintext {
 		_ = os.Remove(path)
 		_ = m.repository.ReleaseCapacity(uploadID)

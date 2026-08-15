@@ -1,0 +1,17 @@
+.git
+.github
+.data
+.env
+.env.*
+node_modules
+dist
+outputs
+docs
+deploy/audit-anchor
+deploy/kms
+deploy/monitoring
+deploy/production
+deploy/self-hosted/secrets
+deploy/self-hosted/runtime
+*.log
+*.png

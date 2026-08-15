@@ -30,3 +30,5 @@ deploy/clamav/logs/
 deploy/kms/secrets/
 deploy/audit-anchor/secrets/
 deploy/production/secrets/
+deploy/self-hosted/secrets/
+deploy/self-hosted/runtime/
