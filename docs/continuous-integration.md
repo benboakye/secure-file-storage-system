@@ -32,4 +32,16 @@ Action and container pins must be updated through a reviewed change that confirm
 
 ## Branch protection
 
-After the workflow exists on GitHub, repository settings should require all three job checks before merging to `main`, require pull-request review, dismiss stale approvals after new commits, and prevent force pushes or deletion of `main`. Branch protection is external GitHub configuration and is not established merely by committing the workflow file.
+The private repository currently uses GitHub Free, which does not provide protected branches for private repositories. The project therefore applies a documented manual merge gate: work remains on a feature branch, all three checks must complete successfully, the pull-request result must be reviewed, and only then may the change be merged to `main`. Force pushes and direct pushes to `main` are prohibited by project procedure even though GitHub cannot enforce that prohibition on the current plan.
+
+If the repository moves to GitHub Pro, Team, or Enterprise, settings should enforce these controls technically by requiring all three job checks, requiring pull-request review, dismissing stale approvals after new commits, and preventing force pushes or deletion of `main`.
+
+## First remote run evidence
+
+Pull request [#1](https://github.com/benboakye/secure-file-storage-system/pull/1) produced the first successful remote run on August 15, 2026. [GitHub Actions run 31876728937](https://github.com/benboakye/secure-file-storage-system/actions/runs/31876728937) completed with status **Success** in 5 minutes 28 seconds:
+
+- Backend, PostgreSQL, and security analysis: **PASS** in 2 minutes 19 seconds.
+- Go race detector with PostgreSQL: **PASS** in 5 minutes 23 seconds.
+- Frontend tests, audit, and production build: **PASS** in 20 seconds.
+
+The captured run summary is retained as [`testing/evidence/github-actions-run-31876728937-success.png`](testing/evidence/github-actions-run-31876728937-success.png). The two earlier `startup_failure` records were GitHub account-billing admission failures: no job runner started and no project code was executed. A fresh run queued normally after the account-plan issue was resolved.

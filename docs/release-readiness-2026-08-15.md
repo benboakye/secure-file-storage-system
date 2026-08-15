@@ -20,7 +20,7 @@
 | Requirements traceability | PASS with deployment qualifications | All 76 defined identifiers map to implementation and evidence families in `docs/requirements-traceability.md`. |
 | PostgreSQL integration execution | PASS | All nine opt-in tests passed against an isolated PostgreSQL 18 database using a loopback-only ephemeral port and memory-backed storage. See `docs/postgresql-integration-verification-2026-08-15.md`. |
 | Revision control | PASS | The audited initial baseline was committed locally as `0b110d4` after generated artifacts, runtime data, exports, environment overrides, and local screenshots were excluded. |
-| Continuous-integration definition | PASS locally; first remote run pending | The read-only GitHub Actions workflow passed actionlint v1.7.12. Its equivalent local gates passed, including the complete race-enabled suite against isolated PostgreSQL, Staticcheck, `govulncheck`, npm audit, frontend tests, and production build. |
+| Continuous integration | PASS locally and remotely | The read-only GitHub Actions workflow passed actionlint v1.7.12 locally. Remote run [31876728937](https://github.com/benboakye/secure-file-storage-system/actions/runs/31876728937) passed all three jobs: backend/PostgreSQL/security analysis, the race-enabled PostgreSQL suite, and frontend tests/audit/build. Screenshot evidence is retained in `docs/testing/evidence/github-actions-run-31876728937-success.png`. |
 
 ## Corrections made during this stage
 
@@ -77,6 +77,6 @@ Docker Compose packaging, Cloudflare Tunnel publication, Windows automatic start
 
 ## Required next actions
 
-1. Publish the local history and CI workflow to GitHub, verify its first run, and configure branch protection to require all three jobs.
+1. Merge only through the documented manual pull-request gate while the private repository remains on GitHub Free; all three CI jobs must pass before merge. Enable enforced branch protection if the repository later moves to a plan that supports it for private repositories.
 2. Implement the deferred self-hosted Docker, Cloudflare Tunnel, Windows startup, and Resend deployment package.
 3. Configure and verify the remaining external deployment boundaries before changing the readiness decision.
